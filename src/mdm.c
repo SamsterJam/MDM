@@ -38,6 +38,8 @@
 #define STATE_FILE "/var/cache/mdm/state"
 #define MIN_UID 1000
 #define FONT_FILE "/usr/local/share/mdm/standard.flf"
+#define FONT_FILE_SMALL "/usr/local/share/mdm/small.flf"
+#define FONT_FILE_MINI "/usr/local/share/mdm/mini.flf"
 
 typedef struct {
     char username[MAX_NAME];
@@ -281,10 +283,23 @@ static void draw_box(int row, int col, int width, int height) {
     printf("┘");
 }
 
+static int get_max_line_width(char **lines, int line_count) {
+    int max_width = 0;
+    for (int i = 0; i < line_count; i++) {
+        int len = strlen(lines[i]);
+        if (len > max_width) {
+            max_width = len;
+        }
+    }
+    return max_width;
+}
+
 static void draw_title(int start_row, int start_col, int box_width, const char *username, int highlighted) {
     static char line_buffers[32][512];
     char *lines[32];
     int line_count;
+    int max_width;
+    int use_plain_text = 0;
 
     /* Initialize line pointers */
     for (int i = 0; i < 32; i++) {
@@ -292,23 +307,70 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
         line_buffers[i][0] = '\0';
     }
 
-    /* Render the username using FIGlet */
+    /* Try rendering with standard font first (already loaded) */
     line_count = figlet_render(username, lines, 32);
 
-    if (line_count == 0) {
-        return;
+    if (line_count > 0) {
+        max_width = get_max_line_width(lines, line_count);
+
+        /* If too wide, try small font */
+        if (max_width >= box_width) {
+            if (figlet_init(FONT_FILE_SMALL) == 0) {
+                /* Clear buffers */
+                for (int i = 0; i < 32; i++) {
+                    line_buffers[i][0] = '\0';
+                }
+                line_count = figlet_render(username, lines, 32);
+                if (line_count > 0) {
+                    max_width = get_max_line_width(lines, line_count);
+                }
+            }
+        }
+
+        /* If still too wide, try mini font */
+        if (max_width >= box_width) {
+            if (figlet_init(FONT_FILE_MINI) == 0) {
+                /* Clear buffers */
+                for (int i = 0; i < 32; i++) {
+                    line_buffers[i][0] = '\0';
+                }
+                line_count = figlet_render(username, lines, 32);
+                if (line_count > 0) {
+                    max_width = get_max_line_width(lines, line_count);
+                }
+            }
+        }
+
+        /* If still too wide, fall back to plain text */
+        if (max_width >= box_width) {
+            use_plain_text = 1;
+        }
+    } else {
+        use_plain_text = 1;
     }
 
     const char *color_start = highlighted ?
         config_get_ansi_color(&colors, "ascii_highlight") :
         config_get_ansi_color(&colors, "ascii_art");
 
-    for (int i = 0; i < line_count; i++) {
-        int len = strlen(lines[i]);
+    if (use_plain_text) {
+        /* Render as plain text centered in the box (moved down 2 lines) */
+        int len = strlen(username);
         int col = start_col + (box_width - len) / 2 + 1;
         if (col < start_col + 1) col = start_col + 1;
-        printf("\033[%d;%dH%s%s\033[0m", start_row + i + 3, col, color_start, lines[i]);
+        printf("\033[%d;%dH%s%s\033[0m", start_row + 5, col, color_start, username);
+    } else {
+        /* Render the ASCII art */
+        for (int i = 0; i < line_count; i++) {
+            int len = strlen(lines[i]);
+            int col = start_col + (box_width - len) / 2 + 1;
+            if (col < start_col + 1) col = start_col + 1;
+            printf("\033[%d;%dH%s%s\033[0m", start_row + i + 3, col, color_start, lines[i]);
+        }
     }
+
+    /* Reload standard font for next call */
+    figlet_init(FONT_FILE);
 }
 
 static void draw_session_selector(int row, int col, int is_active) {

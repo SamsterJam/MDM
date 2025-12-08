@@ -35,6 +35,8 @@ install: $(TARGET)
 	install -Dm644 mdm.service $(DESTDIR)/etc/systemd/system/mdm.service
 	install -Dm644 pam.d/mdm $(DESTDIR)$(PAMDIR)/mdm
 	install -Dm644 assets/standard.flf $(DESTDIR)$(SHAREDIR)/standard.flf
+	install -Dm644 assets/small.flf $(DESTDIR)$(SHAREDIR)/small.flf
+	install -Dm644 assets/mini.flf $(DESTDIR)$(SHAREDIR)/mini.flf
 	install -Dm644 mdm.conf $(DESTDIR)$(CONFDIR)/mdm.conf
 	@echo ""
 	@echo "Installation complete! To enable:"
@@ -48,6 +50,8 @@ uninstall:
 	rm -f $(DESTDIR)/etc/systemd/system/mdm.service
 	rm -f $(DESTDIR)$(PAMDIR)/mdm
 	rm -f $(DESTDIR)$(SHAREDIR)/standard.flf
+	rm -f $(DESTDIR)$(SHAREDIR)/small.flf
+	rm -f $(DESTDIR)$(SHAREDIR)/mini.flf
 	@echo "Note: $(CONFDIR)/mdm.conf left intact for safety"
 
 .PHONY: all clean install uninstall
