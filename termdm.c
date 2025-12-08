@@ -7,6 +7,8 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <dirent.h>
 #include <security/pam_appl.h>
 #include <security/pam_misc.h>
 #include <termios.h>
@@ -15,12 +17,33 @@
 #include <fcntl.h>
 
 #define MAX_PASSWORD 256
+#define MAX_USERS 64
+#define MAX_SESSIONS 32
+#define MAX_NAME 128
 #define CONFIG_FILE "/etc/termdm/config"
+#define STATE_FILE "/var/cache/termdm/state"
+#define MIN_UID 1000
+
+typedef struct {
+    char username[MAX_NAME];
+    char homedir[256];
+    uid_t uid;
+} User;
+
+typedef struct {
+    char name[MAX_NAME];
+    char exec[256];
+    char type[16];
+} Session;
 
 static int term_rows = 24;
 static int term_cols = 80;
-static char default_username[64] = "samsterjam";
-static char session_cmd[256] = "startx";
+static User users[MAX_USERS];
+static int user_count = 0;
+static Session sessions[MAX_SESSIONS];
+static int session_count = 0;
+static int current_user = 0;
+static int current_session = 0;
 
 static int pam_conversation(int num_msg, const struct pam_message **msg,
                             struct pam_response **resp, void *appdata_ptr) {
@@ -56,27 +79,147 @@ static int pam_conversation(int num_msg, const struct pam_message **msg,
     return PAM_SUCCESS;
 }
 
-static void load_config(void) {
-    FILE *f = fopen(CONFIG_FILE, "r");
+static int is_valid_shell(const char *shell) {
+    const char *invalid[] = {"/bin/false", "/usr/bin/false",
+                            "/sbin/nologin", "/usr/sbin/nologin",
+                            "/usr/bin/nologin", "/bin/nologin", NULL};
+    for (int i = 0; invalid[i]; i++) {
+        if (strcmp(shell, invalid[i]) == 0)
+            return 0;
+    }
+    return 1;
+}
+
+static void detect_users(void) {
+    struct passwd *pw;
+    setpwent();
+
+    while ((pw = getpwent()) != NULL && user_count < MAX_USERS) {
+        if (pw->pw_uid >= MIN_UID && pw->pw_uid < 60000 &&
+            pw->pw_shell && is_valid_shell(pw->pw_shell)) {
+            strncpy(users[user_count].username, pw->pw_name, MAX_NAME - 1);
+            users[user_count].username[MAX_NAME - 1] = '\0';
+            strncpy(users[user_count].homedir, pw->pw_dir, 255);
+            users[user_count].homedir[255] = '\0';
+            users[user_count].uid = pw->pw_uid;
+            user_count++;
+        }
+    }
+
+    endpwent();
+
+    if (user_count == 0) {
+        fprintf(stderr, "No valid users found (need UID >= %d and < 60000 with valid shell)\n", MIN_UID);
+        fprintf(stderr, "Debug: getent passwd | awk -F: '$3 >= %d && $3 < 60000 {print $1, $3, $7}'\n", MIN_UID);
+        exit(1);
+    }
+}
+
+static void parse_desktop_file(const char *filepath, const char *type) {
+    FILE *f = fopen(filepath, "r");
+    if (!f) return;
+
+    char line[512];
+    char name[MAX_NAME] = {0};
+    char exec[256] = {0};
+
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "Name=", 5) == 0) {
+            strncpy(name, line + 5, MAX_NAME - 1);
+            char *nl = strchr(name, '\n');
+            if (nl) *nl = '\0';
+        } else if (strncmp(line, "Exec=", 5) == 0) {
+            strncpy(exec, line + 5, 255);
+            char *nl = strchr(exec, '\n');
+            if (nl) *nl = '\0';
+        }
+    }
+
+    fclose(f);
+
+    if (name[0] && exec[0] && session_count < MAX_SESSIONS) {
+        strncpy(sessions[session_count].name, name, MAX_NAME - 1);
+        strncpy(sessions[session_count].exec, exec, 255);
+        strncpy(sessions[session_count].type, type, 15);
+        session_count++;
+    }
+}
+
+static void detect_sessions(void) {
+    const char *dirs[] = {"/usr/share/xsessions", "/usr/share/wayland-sessions"};
+    const char *types[] = {"x11", "wayland"};
+
+    for (int d = 0; d < 2; d++) {
+        DIR *dir = opendir(dirs[d]);
+        if (!dir) continue;
+
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strstr(entry->d_name, ".desktop")) {
+                char path[512];
+                snprintf(path, sizeof(path), "%s/%s", dirs[d], entry->d_name);
+                parse_desktop_file(path, types[d]);
+            }
+        }
+        closedir(dir);
+    }
+
+    if (session_count == 0) {
+        strncpy(sessions[0].name, "startx", MAX_NAME - 1);
+        strncpy(sessions[0].exec, "startx", 255);
+        strncpy(sessions[0].type, "x11", 15);
+        session_count = 1;
+    }
+}
+
+static void load_state(void) {
+    FILE *f = fopen(STATE_FILE, "r");
     if (!f) return;
 
     char line[256];
+    char last_user[MAX_NAME] = {0};
+    char last_session[MAX_NAME] = {0};
+
     while (fgets(line, sizeof(line), f)) {
         char *eq = strchr(line, '=');
         if (!eq) continue;
 
         *eq = '\0';
-        char *key = line;
         char *value = eq + 1;
-
         char *nl = strchr(value, '\n');
         if (nl) *nl = '\0';
 
-        if (strcmp(key, "username") == 0)
-            strncpy(default_username, value, sizeof(default_username) - 1);
-        else if (strcmp(key, "session") == 0)
-            strncpy(session_cmd, value, sizeof(session_cmd) - 1);
+        if (strcmp(line, "last_user") == 0)
+            strncpy(last_user, value, MAX_NAME - 1);
+        else if (strcmp(line, "last_session") == 0)
+            strncpy(last_session, value, MAX_NAME - 1);
     }
+
+    fclose(f);
+
+    for (int i = 0; i < user_count; i++) {
+        if (strcmp(users[i].username, last_user) == 0) {
+            current_user = i;
+            break;
+        }
+    }
+
+    for (int i = 0; i < session_count; i++) {
+        if (strcmp(sessions[i].name, last_session) == 0) {
+            current_session = i;
+            break;
+        }
+    }
+}
+
+static void save_state(void) {
+    mkdir("/var/cache/termdm", 0755);
+
+    FILE *f = fopen(STATE_FILE, "w");
+    if (!f) return;
+
+    fprintf(f, "last_user=%s\n", users[current_user].username);
+    fprintf(f, "last_session=%s\n", sessions[current_session].name);
 
     fclose(f);
 }
@@ -133,45 +276,101 @@ static void draw_title(int start_row, int start_col, int box_width) {
     }
 }
 
-static int read_password(char *password, int max_len, int field_row, int field_col) {
+static void draw_session_selector(int row, int col, int is_active) {
+    char display[128];
+    int len;
+
+    if (is_active) {
+        snprintf(display, sizeof(display), "\033[1;36m<\033[0m \033[1m%s\033[0m \033[1;36m>\033[0m",
+                sessions[current_session].name);
+    } else {
+        snprintf(display, sizeof(display), "\033[2m  %s  \033[0m",
+                sessions[current_session].name);
+    }
+
+    len = strlen(sessions[current_session].name) + 4;
+    int start_col = col - len / 2;
+    printf("\033[%d;%dH%s", row, start_col, display);
+}
+
+static int handle_input(char *password, int max_len, int *pos, int *active_field,
+                       int pass_row, int pass_col, int session_row, int center_col) {
     struct termios old, new;
-    int pos = 0;
 
     tcgetattr(STDIN_FILENO, &old);
     new = old;
     new.c_lflag &= ~(ECHO | ICANON);
     tcsetattr(STDIN_FILENO, TCSANOW, &new);
 
-    printf("\033[?25h");
-    printf("\033[%d;%dH", field_row, field_col);
-    fflush(stdout);
-
     while (1) {
+        if (*active_field == 0) {
+            printf("\033[?25h\033[%d;%dH", pass_row, pass_col + *pos);
+        } else {
+            printf("\033[?25l");
+        }
+        fflush(stdout);
+
         int c = getchar();
 
-        if (c == '\n' || c == '\r') {
-            password[pos] = '\0';
-            break;
-        } else if (c == 127 || c == 8) {
-            if (pos > 0) {
-                pos--;
-                printf("\b \b");
-                fflush(stdout);
-            }
-        } else if (c == 3) {
+        if (c == 3) {
             tcsetattr(STDIN_FILENO, TCSANOW, &old);
             printf("\033[?25l");
             return -1;
-        } else if (pos < max_len - 1 && c >= 32 && c < 127) {
-            password[pos++] = c;
-            putchar('*');
+        }
+
+        if (c == '\t') {
+            *active_field = (*active_field + 1) % 2;
+            draw_session_selector(session_row, center_col, *active_field == 1);
             fflush(stdout);
+            continue;
+        }
+
+        if (c == 27) {
+            c = getchar();
+            if (c == '[') {
+                c = getchar();
+                if (*active_field == 1) {
+                    if (c == 'D' || c == 'C') {
+                        if (c == 'D') {
+                            current_session = (current_session + session_count - 1) % session_count;
+                        } else {
+                            current_session = (current_session + 1) % session_count;
+                        }
+                        printf("\033[%d;%dH                                        ", session_row, center_col - 20);
+                        draw_session_selector(session_row, center_col, 1);
+                        fflush(stdout);
+                    }
+                }
+            }
+            continue;
+        }
+
+        if (*active_field == 0) {
+            if (c == '\n' || c == '\r') {
+                password[*pos] = '\0';
+                break;
+            } else if (c == 127 || c == 8) {
+                if (*pos > 0) {
+                    (*pos)--;
+                    printf("\b \b");
+                    fflush(stdout);
+                }
+            } else if (*pos < max_len - 1 && c >= 32 && c < 127) {
+                password[(*pos)++] = c;
+                putchar('*');
+                fflush(stdout);
+            }
+        } else if (*active_field == 1) {
+            if (c == '\n' || c == '\r') {
+                *active_field = 0;
+                draw_session_selector(session_row, center_col, 0);
+                fflush(stdout);
+            }
         }
     }
 
     printf("\033[?25l");
     tcsetattr(STDIN_FILENO, TCSANOW, &old);
-
     return 0;
 }
 
@@ -189,16 +388,33 @@ static int display_login(char *password) {
     draw_box(start_row, start_col, box_width, box_height);
     draw_title(start_row, start_col, box_width);
 
-    int input_row = start_row + 10;
+    if (user_count > 1) {
+        int user_label_row = start_row + 9;
+        int user_label_col = start_col + (box_width - strlen(users[current_user].username)) / 2 + 1;
+        printf("\033[%d;%dH\033[2mUser: \033[1m%s\033[0m", user_label_row, user_label_col,
+               users[current_user].username);
+    }
+
+    int input_row = start_row + (user_count > 1 ? 10 : 9);
     int input_col = start_col + 4;
     int input_width = box_width - 6;
 
     draw_box(input_row, input_col, input_width, 1);
+    printf("\033[%d;%dH\033[2mPassword\033[0m", input_row, input_col + 2);
 
     int field_row = input_row + 1;
     int field_col = input_col + 2;
 
-    if (read_password(password, MAX_PASSWORD, field_row, field_col) < 0)
+    int session_row = input_row + 4;
+    int center_col = start_col + box_width / 2 + 1;
+
+    draw_session_selector(session_row, center_col, 0);
+
+    int active_field = 0;
+    int pos = 0;
+
+    if (handle_input(password, MAX_PASSWORD, &pos, &active_field,
+                    field_row, field_col, session_row, center_col) < 0)
         return -1;
 
     if (strlen(password) == 0) {
@@ -213,6 +429,7 @@ static int display_login(char *password) {
 
 static void setup_user_environment(struct passwd *pw) {
     char xauth_path[256];
+    char runtime_dir[256];
 
     setenv("HOME", pw->pw_dir, 1);
     setenv("SHELL", pw->pw_shell, 1);
@@ -224,6 +441,9 @@ static void setup_user_environment(struct passwd *pw) {
 
     snprintf(xauth_path, sizeof(xauth_path), "%s/.Xauthority", pw->pw_dir);
     setenv("XAUTHORITY", xauth_path, 1);
+
+    snprintf(runtime_dir, sizeof(runtime_dir), "/run/user/%d", pw->pw_uid);
+    setenv("XDG_RUNTIME_DIR", runtime_dir, 1);
 
     setenv("XDG_SESSION_TYPE", "x11", 1);
     setenv("XDG_SESSION_CLASS", "user", 1);
@@ -276,41 +496,51 @@ static int start_session(const char *username, pam_handle_t *pamh) {
 
         setup_user_environment(pw);
 
+        if (strcmp(sessions[current_session].type, "wayland") == 0) {
+            setenv("XDG_SESSION_TYPE", "wayland", 1);
+        } else {
+            setenv("XDG_SESSION_TYPE", "x11", 1);
+        }
+
         if (init_groups(pw) != 0) {
             exit(1);
         }
 
         char *argv[64];
         int argc = 0;
-        char *cmd_copy = strdup(session_cmd);
-        char *token = strtok(cmd_copy, " ");
 
-        while (token && argc < 63) {
-            argv[argc++] = token;
-            token = strtok(NULL, " ");
-        }
-        argv[argc] = NULL;
+        if (strcmp(sessions[current_session].type, "x11") == 0) {
+            argv[argc++] = "xinit";
 
-        if (argc > 0 && strcmp(argv[0], "startx") == 0) {
-            int has_server_args = 0;
-            for (int i = 0; i < argc; i++) {
-                if (strcmp(argv[i], "--") == 0) {
-                    has_server_args = 1;
-                    break;
-                }
+            char *cmd_copy = strdup(sessions[current_session].exec);
+            char *token = strtok(cmd_copy, " ");
+            while (token && argc < 60) {
+                argv[argc++] = token;
+                token = strtok(NULL, " ");
             }
-            if (!has_server_args && argc < 62) {
-                argv[argc++] = "--";
-                argv[argc++] = "vt1";
-                argv[argc] = NULL;
+
+            argv[argc++] = "--";
+            argv[argc++] = ":0";
+            argv[argc++] = "vt1";
+            argv[argc] = NULL;
+        } else {
+            char *cmd_copy = strdup(sessions[current_session].exec);
+            char *token = strtok(cmd_copy, " ");
+
+            while (token && argc < 63) {
+                argv[argc++] = token;
+                token = strtok(NULL, " ");
             }
+            argv[argc] = NULL;
         }
 
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0) {
-            dup2(devnull, STDOUT_FILENO);
-            dup2(devnull, STDERR_FILENO);
-            close(devnull);
+        char logfile[512];
+        snprintf(logfile, sizeof(logfile), "%s/.termdm-session.log", pw->pw_dir);
+        int logfd = open(logfile, O_WRONLY | O_CREAT | O_APPEND, 0600);
+        if (logfd >= 0) {
+            dup2(logfd, STDOUT_FILENO);
+            dup2(logfd, STDERR_FILENO);
+            close(logfd);
         }
 
         execvp(argv[0], argv);
@@ -371,8 +601,10 @@ int main(void) {
         return 1;
     }
 
-    load_config();
     get_term_size();
+    detect_users();
+    detect_sessions();
+    load_state();
 
     while (1) {
         memset(password, 0, sizeof(password));
@@ -394,7 +626,8 @@ int main(void) {
         printf("\033[%d;%dHAuthenticating...", msg_row, msg_col);
         fflush(stdout);
 
-        if (authenticate(default_username, password) == 0) {
+        if (authenticate(users[current_user].username, password) == 0) {
+            save_state();
             memset(password, 0, sizeof(password));
             continue;
         } else {

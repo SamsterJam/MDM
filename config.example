@@ -1,15 +1,9 @@
 # TermDM Configuration File
-# This file should be installed at /etc/termdm/config
-
-# Default username to authenticate
-username=samsterjam
-
-# Session command to execute after successful login
-# Examples:
-#   startx              - Start X11 with ~/.xinitrc (auto-adds -- vt1)
-#   sway                - Start Sway (Wayland)
-#   Hyprland            - Start Hyprland
-#   startx /usr/bin/i3  - Start specific WM
+# NOTE: This file is no longer needed!
 #
-# Note: For startx, termdm automatically adds "-- vt1" to use the current VT
-session=startx
+# TermDM now automatically detects:
+# - All system users (UID >= 1000)
+# - All available sessions from /usr/share/xsessions and /usr/share/wayland-sessions
+# - Remembers your last selection in /var/cache/termdm/state
+#
+# This file is kept for reference only and is not used by termdm.
