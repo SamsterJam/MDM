@@ -259,20 +259,38 @@ static void draw_box(int row, int col, int width, int height) {
     printf("┘");
 }
 
-static void draw_title(int start_row, int start_col, int box_width) {
-    const char *ascii_lines[] = {
-        " _____                     _            ___                 ",
-        "/  ___|                   | |          |_  |                ",
-        "\\ `--.  __ _ _ __ ___  ___| |_ ___ _ __  | | __ _ _ __ ___  ",
-        " `--. \\/ _` | '_ ` _ \\/ __| __/ _ \\ '__| | |/ _` | '_ ` _ \\ ",
-        "/\\__/ / (_| | | | | | \\__ \\ ||  __/ |/\\__/ / (_| | | | | | |",
-        "\\____/ \\__,_|_| |_| |_|___/\\__\\___|_|\\____/ \\__,_|_| |_| |_|"
-    };
+static void draw_title(int start_row, int start_col, int box_width, const char *username, int highlighted) {
+    FILE *fp;
+    char command[512];
+    char line[256];
+    int line_count = 0;
+    char *lines[32];
 
-    for (int i = 0; i < 6; i++) {
-        int len = strlen(ascii_lines[i]);
+    snprintf(command, sizeof(command), "figlet -f standard '%s'", username);
+    fp = popen(command, "r");
+
+    if (!fp) {
+        return;
+    }
+
+    while (fgets(line, sizeof(line), fp) && line_count < 32) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+
+        lines[line_count] = strdup(line);
+        line_count++;
+    }
+
+    pclose(fp);
+
+    const char *color_start = highlighted ? "\033[1;36m" : "\033[1m";
+
+    for (int i = 0; i < line_count; i++) {
+        int len = strlen(lines[i]);
         int col = start_col + (box_width - len) / 2 + 1;
-        printf("\033[%d;%dH\033[1m%s\033[0m", start_row + i + 3, col, ascii_lines[i]);
+        if (col < start_col + 1) col = start_col + 1;
+        printf("\033[%d;%dH%s%s\033[0m", start_row + i + 3, col, color_start, lines[i]);
+        free(lines[i]);
     }
 }
 
@@ -293,8 +311,22 @@ static void draw_session_selector(int row, int col, int is_active) {
     printf("\033[%d;%dH%s", row, start_col, display);
 }
 
-static int handle_input(char *password, int max_len, int *pos, int *active_field,
-                       int pass_row, int pass_col, int session_row, int center_col) {
+static void to_lowercase(char *dest, const char *src, size_t size) {
+    size_t i;
+    for (i = 0; i < size - 1 && src[i] != '\0'; i++) {
+        if (src[i] >= 'A' && src[i] <= 'Z') {
+            dest[i] = src[i] + ('a' - 'A');
+        } else {
+            dest[i] = src[i];
+        }
+    }
+    dest[i] = '\0';
+}
+
+static int handle_input(char *username, char *password, int max_len, int *pass_pos, int *user_pos,
+                       int *active_field, int *user_edit_mode, int user_row, int pass_row,
+                       int pass_col, int session_row, int center_col,
+                       int start_row, int start_col, int box_width) {
     struct termios old, new;
 
     tcgetattr(STDIN_FILENO, &old);
@@ -303,8 +335,11 @@ static int handle_input(char *password, int max_len, int *pos, int *active_field
     tcsetattr(STDIN_FILENO, TCSANOW, &new);
 
     while (1) {
-        if (*active_field == 0) {
-            printf("\033[?25h\033[%d;%dH", pass_row, pass_col + *pos);
+        if (*active_field == 0 && *user_edit_mode) {
+            int edit_col = center_col - (int)(strlen(username) / 2) + *user_pos;
+            printf("\033[?25h\033[%d;%dH", user_row, edit_col);
+        } else if (*active_field == 1) {
+            printf("\033[?25h\033[%d;%dH", pass_row, pass_col + *pass_pos);
         } else {
             printf("\033[?25l");
         }
@@ -319,8 +354,30 @@ static int handle_input(char *password, int max_len, int *pos, int *active_field
         }
 
         if (c == '\t') {
-            *active_field = (*active_field + 1) % 2;
-            draw_session_selector(session_row, center_col, *active_field == 1);
+            if (*active_field == 0 && *user_edit_mode) {
+                *user_edit_mode = 0;
+                printf("\033[2J\033[H\033[?25l");
+                draw_box(start_row, start_col, box_width, 13);
+                draw_title(start_row, start_col, box_width, username, 0);
+                draw_box(pass_row - 1, start_col + 4, box_width - 6, 1);
+                draw_session_selector(session_row, center_col, 0);
+            }
+            int old_field = *active_field;
+            *active_field = (*active_field + 1) % 3;
+            if (old_field == 0 && !*user_edit_mode) {
+                printf("\033[2J\033[H\033[?25l");
+                draw_box(start_row, start_col, box_width, 13);
+                draw_title(start_row, start_col, box_width, username, 0);
+                draw_box(pass_row - 1, start_col + 4, box_width - 6, 1);
+                draw_session_selector(session_row, center_col, 0);
+            } else if (*active_field == 0 && !*user_edit_mode) {
+                printf("\033[2J\033[H\033[?25l");
+                draw_box(start_row, start_col, box_width, 13);
+                draw_title(start_row, start_col, box_width, username, 1);
+                draw_box(pass_row - 1, start_col + 4, box_width - 6, 1);
+                draw_session_selector(session_row, center_col, 0);
+            }
+            draw_session_selector(session_row, center_col, *active_field == 2);
             fflush(stdout);
             continue;
         }
@@ -329,7 +386,7 @@ static int handle_input(char *password, int max_len, int *pos, int *active_field
             c = getchar();
             if (c == '[') {
                 c = getchar();
-                if (*active_field == 1) {
+                if (*active_field == 2) {
                     if (c == 'D' || c == 'C') {
                         if (c == 'D') {
                             current_session = (current_session + session_count - 1) % session_count;
@@ -346,23 +403,62 @@ static int handle_input(char *password, int max_len, int *pos, int *active_field
         }
 
         if (*active_field == 0) {
-            if (c == '\n' || c == '\r') {
-                password[*pos] = '\0';
-                break;
-            } else if (c == 127 || c == 8) {
-                if (*pos > 0) {
-                    (*pos)--;
-                    printf("\b \b");
+            if (*user_edit_mode) {
+                if (c == '\n' || c == '\r') {
+                    *user_edit_mode = 0;
+                    printf("\033[2J\033[H\033[?25l");
+                    draw_box(start_row, start_col, box_width, 13);
+                    draw_title(start_row, start_col, box_width, username, 1);
+                    draw_box(pass_row - 1, start_col + 4, box_width - 6, 1);
+                    draw_session_selector(session_row, center_col, 0);
+                    fflush(stdout);
+                } else if (c == 127 || c == 8) {
+                    if (*user_pos > 0) {
+                        (*user_pos)--;
+                        username[*user_pos] = '\0';
+                        printf("\033[%d;%dH%-70s", user_row, start_col + 1, "");
+                        int text_col = center_col - (int)(strlen(username) / 2);
+                        printf("\033[%d;%dH%s", user_row, text_col, username);
+                        fflush(stdout);
+                    }
+                } else if (*user_pos < MAX_NAME - 1 && c >= 32 && c < 127) {
+                    username[(*user_pos)++] = c;
+                    username[*user_pos] = '\0';
+                    printf("\033[%d;%dH%-70s", user_row, start_col + 1, "");
+                    int text_col = center_col - (int)(strlen(username) / 2);
+                    printf("\033[%d;%dH%s", user_row, text_col, username);
                     fflush(stdout);
                 }
-            } else if (*pos < max_len - 1 && c >= 32 && c < 127) {
-                password[(*pos)++] = c;
-                putchar('*');
-                fflush(stdout);
+            } else {
+                if (c == '\n' || c == '\r') {
+                    *user_edit_mode = 1;
+                    *user_pos = strlen(username);
+                    for (int i = 0; i < 6; i++) {
+                        printf("\033[%d;%dH%-70s", start_row + i + 3, start_col + 1, "");
+                    }
+                    int text_col = center_col - (int)(strlen(username) / 2);
+                    printf("\033[%d;%dH%s", user_row, text_col, username);
+                    fflush(stdout);
+                }
             }
         } else if (*active_field == 1) {
             if (c == '\n' || c == '\r') {
-                *active_field = 0;
+                password[*pass_pos] = '\0';
+                break;
+            } else if (c == 127 || c == 8) {
+                if (*pass_pos > 0) {
+                    (*pass_pos)--;
+                    printf("\b \b");
+                    fflush(stdout);
+                }
+            } else if (*pass_pos < max_len - 1 && c >= 32 && c < 127) {
+                password[(*pass_pos)++] = c;
+                putchar('*');
+                fflush(stdout);
+            }
+        } else if (*active_field == 2) {
+            if (c == '\n' || c == '\r') {
+                *active_field = 1;
                 draw_session_selector(session_row, center_col, 0);
                 fflush(stdout);
             }
@@ -374,7 +470,7 @@ static int handle_input(char *password, int max_len, int *pos, int *active_field
     return 0;
 }
 
-static int display_login(char *password) {
+static int display_login(char *password, char *username) {
     int box_width = 70;
     int box_height = 13;
     int start_col = (term_cols - box_width - 2) / 2;
@@ -386,35 +482,32 @@ static int display_login(char *password) {
     printf("\033[2J\033[H\033[?25l");
 
     draw_box(start_row, start_col, box_width, box_height);
-    draw_title(start_row, start_col, box_width);
+    draw_title(start_row, start_col, box_width, username, 1);
 
-    if (user_count > 1) {
-        int user_label_row = start_row + 9;
-        int user_label_col = start_col + (box_width - strlen(users[current_user].username)) / 2 + 1;
-        printf("\033[%d;%dH\033[2mUser: \033[1m%s\033[0m", user_label_row, user_label_col,
-               users[current_user].username);
-    }
+    int user_row = start_row + 9;
+    int center_col = start_col + box_width / 2 + 1;
 
-    int input_row = start_row + (user_count > 1 ? 10 : 9);
+    int input_row = start_row + 10;
     int input_col = start_col + 4;
     int input_width = box_width - 6;
 
     draw_box(input_row, input_col, input_width, 1);
-    printf("\033[%d;%dH\033[2mPassword\033[0m", input_row, input_col + 2);
 
     int field_row = input_row + 1;
     int field_col = input_col + 2;
 
     int session_row = input_row + 4;
-    int center_col = start_col + box_width / 2 + 1;
 
     draw_session_selector(session_row, center_col, 0);
 
     int active_field = 0;
-    int pos = 0;
+    int pass_pos = 0;
+    int user_pos = strlen(username);
+    int user_edit_mode = 0;
 
-    if (handle_input(password, MAX_PASSWORD, &pos, &active_field,
-                    field_row, field_col, session_row, center_col) < 0)
+    if (handle_input(username, password, MAX_PASSWORD, &pass_pos, &user_pos, &active_field,
+                    &user_edit_mode, user_row, field_row, field_col, session_row, center_col,
+                    start_row, start_col, box_width) < 0)
         return -1;
 
     if (strlen(password) == 0) {
@@ -595,6 +688,7 @@ static int authenticate(const char *username, const char *password) {
 
 int main(void) {
     char password[MAX_PASSWORD];
+    char username[MAX_NAME];
 
     if (getuid() != 0) {
         fprintf(stderr, "termdm must be run as root\n");
@@ -606,10 +700,13 @@ int main(void) {
     detect_sessions();
     load_state();
 
+    strncpy(username, users[current_user].username, MAX_NAME - 1);
+    username[MAX_NAME - 1] = '\0';
+
     while (1) {
         memset(password, 0, sizeof(password));
 
-        int result = display_login(password);
+        int result = display_login(password, username);
 
         if (result < 0) {
             printf("\033[2J\033[H\033[?25h");
@@ -626,9 +723,20 @@ int main(void) {
         printf("\033[%d;%dHAuthenticating...", msg_row, msg_col);
         fflush(stdout);
 
-        if (authenticate(users[current_user].username, password) == 0) {
+        char username_lower[MAX_NAME];
+        to_lowercase(username_lower, username, MAX_NAME);
+
+        if (authenticate(username_lower, password) == 0) {
+            for (int i = 0; i < user_count; i++) {
+                if (strcmp(users[i].username, username_lower) == 0) {
+                    current_user = i;
+                    break;
+                }
+            }
             save_state();
             memset(password, 0, sizeof(password));
+            strncpy(username, users[current_user].username, MAX_NAME - 1);
+            username[MAX_NAME - 1] = '\0';
             continue;
         } else {
             printf("\033[2J\033[H");
