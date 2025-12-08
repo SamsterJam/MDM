@@ -317,6 +317,14 @@ static void draw_session_selector(int row, int col, int is_active) {
     printf("\033[%d;%dH%s", row, start_col, display);
 }
 
+static void draw_password(int row, int col, int pass_pos) {
+    printf("\033[%d;%dH", row, col);
+    for (int i = 0; i < pass_pos; i++) {
+        putchar('*');
+    }
+    fflush(stdout);
+}
+
 static void to_lowercase(char *dest, const char *src, size_t size) {
     size_t i;
     for (i = 0; i < size - 1 && src[i] != '\0'; i++) {
@@ -370,6 +378,7 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                 draw_box(start_row, start_col, box_width, 13);
                 draw_title(start_row, start_col, box_width, username, 0);
                 draw_box(pass_row - 1, start_col + 4, box_width - 6, 1);
+                draw_password(pass_row, pass_col, *pass_pos);
                 draw_session_selector(session_row, center_col, 0);
             }
             int old_field = *active_field;
@@ -379,12 +388,14 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                 draw_box(start_row, start_col, box_width, 13);
                 draw_title(start_row, start_col, box_width, username, 0);
                 draw_box(pass_row - 1, start_col + 4, box_width - 6, 1);
+                draw_password(pass_row, pass_col, *pass_pos);
                 draw_session_selector(session_row, center_col, 0);
             } else if (*active_field == 0 && !*user_edit_mode) {
                 printf("\033[2J\033[H\033[?25l");
                 draw_box(start_row, start_col, box_width, 13);
                 draw_title(start_row, start_col, box_width, username, 1);
                 draw_box(pass_row - 1, start_col + 4, box_width - 6, 1);
+                draw_password(pass_row, pass_col, *pass_pos);
                 draw_session_selector(session_row, center_col, 0);
             }
             draw_session_selector(session_row, center_col, *active_field == 2);
@@ -433,6 +444,7 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                     draw_box(start_row, start_col, box_width, 13);
                     draw_title(start_row, start_col, box_width, username, 1);
                     draw_box(pass_row - 1, start_col + 4, box_width - 6, 1);
+                    draw_password(pass_row, pass_col, *pass_pos);
                     draw_session_selector(session_row, center_col, 0);
                     fflush(stdout);
                 } else if (c == 127 || c == 8) {
