@@ -172,7 +172,7 @@ static void detect_sessions(void) {
     }
 }
 
-static void load_state(void) {
+static void load_state(char *display_name) {
     FILE *f = fopen(STATE_FILE, "r");
     if (!f) return;
 
@@ -193,6 +193,8 @@ static void load_state(void) {
             strncpy(last_user, value, MAX_NAME - 1);
         else if (strcmp(line, "last_session") == 0)
             strncpy(last_session, value, MAX_NAME - 1);
+        else if (strcmp(line, "display_name") == 0)
+            strncpy(display_name, value, MAX_NAME - 1);
     }
 
     fclose(f);
@@ -212,7 +214,7 @@ static void load_state(void) {
     }
 }
 
-static void save_state(void) {
+static void save_state(const char *display_name) {
     mkdir("/var/cache/termdm", 0755);
 
     FILE *f = fopen(STATE_FILE, "w");
@@ -220,6 +222,7 @@ static void save_state(void) {
 
     fprintf(f, "last_user=%s\n", users[current_user].username);
     fprintf(f, "last_session=%s\n", sessions[current_session].name);
+    fprintf(f, "display_name=%s\n", display_name);
 
     fclose(f);
 }
@@ -482,7 +485,7 @@ static int display_login(char *password, char *username) {
     printf("\033[2J\033[H\033[?25l");
 
     draw_box(start_row, start_col, box_width, box_height);
-    draw_title(start_row, start_col, box_width, username, 1);
+    draw_title(start_row, start_col, box_width, username, 0);
 
     int user_row = start_row + 9;
     int center_col = start_col + box_width / 2 + 1;
@@ -500,7 +503,7 @@ static int display_login(char *password, char *username) {
 
     draw_session_selector(session_row, center_col, 0);
 
-    int active_field = 0;
+    int active_field = 1;
     int pass_pos = 0;
     int user_pos = strlen(username);
     int user_edit_mode = 0;
@@ -689,6 +692,7 @@ static int authenticate(const char *username, const char *password) {
 int main(void) {
     char password[MAX_PASSWORD];
     char username[MAX_NAME];
+    char display_name[MAX_NAME] = {0};
 
     if (getuid() != 0) {
         fprintf(stderr, "termdm must be run as root\n");
@@ -698,9 +702,13 @@ int main(void) {
     get_term_size();
     detect_users();
     detect_sessions();
-    load_state();
+    load_state(display_name);
 
-    strncpy(username, users[current_user].username, MAX_NAME - 1);
+    if (display_name[0] != '\0') {
+        strncpy(username, display_name, MAX_NAME - 1);
+    } else {
+        strncpy(username, users[current_user].username, MAX_NAME - 1);
+    }
     username[MAX_NAME - 1] = '\0';
 
     while (1) {
@@ -733,9 +741,11 @@ int main(void) {
                     break;
                 }
             }
-            save_state();
+            strncpy(display_name, username, MAX_NAME - 1);
+            display_name[MAX_NAME - 1] = '\0';
+            save_state(display_name);
             memset(password, 0, sizeof(password));
-            strncpy(username, users[current_user].username, MAX_NAME - 1);
+            strncpy(username, display_name, MAX_NAME - 1);
             username[MAX_NAME - 1] = '\0';
             continue;
         } else {
