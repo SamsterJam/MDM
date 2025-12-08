@@ -1,3 +1,15 @@
+/*
+ * MDM - Minimal Display Manager
+ * A lightweight terminal-based display manager with zero external dependencies
+ *
+ * Features:
+ * - Auto-detects system users and sessions
+ * - PAM authentication
+ * - Clean TUI with keyboard navigation
+ * - Supports both X11 and Wayland
+ * - Built-in FIGlet-style font rendering
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,14 +27,16 @@
 #include <signal.h>
 #include <errno.h>
 #include <fcntl.h>
+#include "ascii.h"
 
 #define MAX_PASSWORD 256
 #define MAX_USERS 64
 #define MAX_SESSIONS 32
 #define MAX_NAME 128
-#define CONFIG_FILE "/etc/termdm/config"
-#define STATE_FILE "/var/cache/termdm/state"
+#define CONFIG_FILE "/etc/mdm/config"
+#define STATE_FILE "/var/cache/mdm/state"
 #define MIN_UID 1000
+#define FONT_FILE "/usr/local/share/mdm/standard.flf"
 
 typedef struct {
     char username[MAX_NAME];
@@ -218,7 +232,7 @@ static void load_state(char *display_name) {
 }
 
 static void save_state(const char *display_name) {
-    mkdir("/var/cache/termdm", 0755);
+    mkdir("/var/cache/mdm", 0755);
 
     FILE *f = fopen(STATE_FILE, "w");
     if (!f) return;
@@ -266,28 +280,22 @@ static void draw_box(int row, int col, int width, int height) {
 }
 
 static void draw_title(int start_row, int start_col, int box_width, const char *username, int highlighted) {
-    FILE *fp;
-    char command[512];
-    char line[256];
-    int line_count = 0;
+    static char line_buffers[32][512];
     char *lines[32];
+    int line_count;
 
-    snprintf(command, sizeof(command), "figlet -f standard '%s'", username);
-    fp = popen(command, "r");
+    /* Initialize line pointers */
+    for (int i = 0; i < 32; i++) {
+        lines[i] = line_buffers[i];
+        line_buffers[i][0] = '\0';
+    }
 
-    if (!fp) {
+    /* Render the username using ASCII art */
+    line_count = ascii_render(username, lines, 32);
+
+    if (line_count == 0) {
         return;
     }
-
-    while (fgets(line, sizeof(line), fp) && line_count < 32) {
-        char *nl = strchr(line, '\n');
-        if (nl) *nl = '\0';
-
-        lines[line_count] = strdup(line);
-        line_count++;
-    }
-
-    pclose(fp);
 
     const char *color_start = highlighted ? "\033[1;36m" : "\033[1m";
 
@@ -296,7 +304,6 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
         int col = start_col + (box_width - len) / 2 + 1;
         if (col < start_col + 1) col = start_col + 1;
         printf("\033[%d;%dH%s%s\033[0m", start_row + i + 3, col, color_start, lines[i]);
-        free(lines[i]);
     }
 }
 
@@ -679,7 +686,7 @@ static int start_session(const char *username, pam_handle_t *pamh) {
         }
 
         char logfile[512];
-        snprintf(logfile, sizeof(logfile), "%s/.termdm-session.log", pw->pw_dir);
+        snprintf(logfile, sizeof(logfile), "%s/.mdm-session.log", pw->pw_dir);
         int logfd = open(logfile, O_WRONLY | O_CREAT | O_APPEND, 0600);
         if (logfd >= 0) {
             dup2(logfd, STDOUT_FILENO);
@@ -710,7 +717,7 @@ static int authenticate(const char *username, const char *password) {
 
     int retval;
 
-    retval = pam_start("termdm", username, &conv, &pamh);
+    retval = pam_start("mdm", username, &conv, &pamh);
     if (retval != PAM_SUCCESS) {
         fprintf(stderr, "pam_start failed: %s\n", pam_strerror(pamh, retval));
         return -1;
@@ -743,8 +750,13 @@ int main(void) {
     char display_name[MAX_NAME] = {0};
 
     if (getuid() != 0) {
-        fprintf(stderr, "termdm must be run as root\n");
+        fprintf(stderr, "mdm must be run as root\n");
         return 1;
+    }
+
+    /* Initialize ASCII art font */
+    if (ascii_init(FONT_FILE) != 0) {
+        fprintf(stderr, "Warning: Could not load font file %s\n", FONT_FILE);
     }
 
     get_term_size();
@@ -809,5 +821,6 @@ int main(void) {
 
     printf("\033[?25h\033[2J\033[H");
 
+    ascii_cleanup();
     return 0;
 }

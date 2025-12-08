@@ -1,5 +1,8 @@
-/target
-Cargo.lock
+# Build artifacts
+mdm
+*.o
+
+# Editor files
 *.swp
 *.swo
 *~

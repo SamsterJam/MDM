@@ -1,9 +1,9 @@
-# TermDM Configuration File
+# MDM Configuration File
 # NOTE: This file is no longer needed!
 #
-# TermDM now automatically detects:
+# MDM now automatically detects:
 # - All system users (UID >= 1000)
 # - All available sessions from /usr/share/xsessions and /usr/share/wayland-sessions
-# - Remembers your last selection in /var/cache/termdm/state
+# - Remembers your last selection in /var/cache/mdm/state
 #
-# This file is kept for reference only and is not used by termdm.
+# This file is kept for reference only and is not used by mdm.

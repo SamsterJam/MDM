@@ -1,5 +1,5 @@
 [Unit]
-Description=TermDM - Terminal Display Manager
+Description=MDM - Minimal Display Manager
 After=systemd-user-sessions.service
 After=plymouth-quit-wait.service
 Conflicts=getty@tty1.service
@@ -7,7 +7,7 @@ After=getty@tty1.service
 
 [Service]
 Type=idle
-ExecStart=/usr/local/bin/termdm
+ExecStart=/usr/local/bin/mdm
 Restart=always
 StandardInput=tty
 StandardOutput=tty
