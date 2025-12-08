@@ -334,11 +334,15 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                        int pass_col, int session_row, int center_col,
                        int start_row, int start_col, int box_width) {
     struct termios old, new;
+    char original_username[MAX_NAME];
 
     tcgetattr(STDIN_FILENO, &old);
     new = old;
     new.c_lflag &= ~(ECHO | ICANON);
     tcsetattr(STDIN_FILENO, TCSANOW, &new);
+
+    strncpy(original_username, username, MAX_NAME - 1);
+    original_username[MAX_NAME - 1] = '\0';
 
     while (1) {
         if (*active_field == 0 && *user_edit_mode) {
@@ -416,6 +420,14 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
         if (*active_field == 0) {
             if (*user_edit_mode) {
                 if (c == '\n' || c == '\r') {
+                    if (strlen(username) == 0) {
+                        strncpy(username, original_username, MAX_NAME - 1);
+                        username[MAX_NAME - 1] = '\0';
+                        *user_pos = strlen(username);
+                    } else {
+                        strncpy(original_username, username, MAX_NAME - 1);
+                        original_username[MAX_NAME - 1] = '\0';
+                    }
                     *user_edit_mode = 0;
                     printf("\033[2J\033[H\033[?25l");
                     draw_box(start_row, start_col, box_width, 13);
@@ -495,7 +507,7 @@ static int display_login(char *password, char *username) {
     draw_box(start_row, start_col, box_width, box_height);
     draw_title(start_row, start_col, box_width, username, 0);
 
-    int user_row = start_row + 9;
+    int user_row = start_row + 6;
     int center_col = start_col + box_width / 2 + 1;
 
     int input_row = start_row + 10;
