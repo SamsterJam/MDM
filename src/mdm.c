@@ -28,12 +28,13 @@
 #include <errno.h>
 #include <fcntl.h>
 #include "figlet.h"
+#include "config.h"
 
 #define MAX_PASSWORD 256
 #define MAX_USERS 64
 #define MAX_SESSIONS 32
 #define MAX_NAME 128
-#define CONFIG_FILE "/etc/mdm/config"
+#define CONFIG_FILE "/etc/mdm/mdm.conf"
 #define STATE_FILE "/var/cache/mdm/state"
 #define MIN_UID 1000
 #define FONT_FILE "/usr/local/share/mdm/standard.flf"
@@ -58,6 +59,7 @@ static Session sessions[MAX_SESSIONS];
 static int session_count = 0;
 static int current_user = 0;
 static int current_session = 0;
+static ColorConfig colors;
 
 static int pam_conversation(int num_msg, const struct pam_message **msg,
                             struct pam_response **resp, void *appdata_ptr) {
@@ -297,7 +299,9 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
         return;
     }
 
-    const char *color_start = highlighted ? "\033[1;36m" : "\033[1m";
+    const char *color_start = highlighted ?
+        config_get_ansi_color(&colors, "ascii_highlight") :
+        config_get_ansi_color(&colors, "ascii_art");
 
     for (int i = 0; i < line_count; i++) {
         int len = strlen(lines[i]);
@@ -312,10 +316,17 @@ static void draw_session_selector(int row, int col, int is_active) {
     int len;
 
     if (is_active) {
-        snprintf(display, sizeof(display), "\033[1;36m<\033[0m \033[1m%s\033[0m \033[1;36m>\033[0m",
-                sessions[current_session].name);
+        snprintf(display, sizeof(display), "%s<%s %s%s%s %s>%s",
+                config_get_ansi_color(&colors, "selector"),
+                "\033[0m",
+                config_get_ansi_color(&colors, "session"),
+                sessions[current_session].name,
+                "\033[0m",
+                config_get_ansi_color(&colors, "selector"),
+                "\033[0m");
     } else {
-        snprintf(display, sizeof(display), "\033[2m  %s  \033[0m",
+        snprintf(display, sizeof(display), "%s  %s  \033[0m",
+                config_get_ansi_color(&colors, "session_dim"),
                 sessions[current_session].name);
     }
 
@@ -553,7 +564,8 @@ static int display_login(char *password, char *username) {
         return -1;
 
     if (strlen(password) == 0) {
-        printf("\033[%d;%dH\033[31mPassword cannot be empty\033[0m", input_row + 2, input_col + 2);
+        printf("\033[%d;%dH%sPassword cannot be empty\033[0m", input_row + 2, input_col + 2,
+               config_get_ansi_color(&colors, "error"));
         fflush(stdout);
         sleep(1);
         return 0;
@@ -754,6 +766,12 @@ int main(void) {
         return 1;
     }
 
+    /* Load color configuration */
+    config_load(CONFIG_FILE, &colors);
+
+    /* Apply TTY color palette */
+    config_apply_tty_colors(&colors);
+
     /* Initialize FIGlet font */
     if (figlet_init(FONT_FILE) != 0) {
         fprintf(stderr, "Warning: Could not load font file %s\n", FONT_FILE);
@@ -788,7 +806,8 @@ int main(void) {
         printf("\033[2J\033[H");
         int msg_row = term_rows / 2;
         int msg_col = (term_cols - 20) / 2;
-        printf("\033[%d;%dHAuthenticating...", msg_row, msg_col);
+        printf("\033[%d;%dH%sAuthenticating...\033[0m", msg_row, msg_col,
+               config_get_ansi_color(&colors, "info"));
         fflush(stdout);
 
         char username_lower[MAX_NAME];
@@ -812,7 +831,8 @@ int main(void) {
             printf("\033[2J\033[H");
             int err_row = term_rows / 2;
             int err_col = (term_cols - 25) / 2;
-            printf("\033[%d;%dH\033[31mAuthentication failed!\033[0m", err_row, err_col);
+            printf("\033[%d;%dH%sAuthentication failed!\033[0m", err_row, err_col,
+                   config_get_ansi_color(&colors, "error"));
             fflush(stdout);
             sleep(2);
             memset(password, 0, sizeof(password));

@@ -11,7 +11,7 @@ SHAREDIR = $(PREFIX)/share/mdm
 TARGET = mdm
 SRCDIR = src
 BUILDDIR = build
-SOURCES = $(SRCDIR)/mdm.c $(SRCDIR)/figlet.c
+SOURCES = $(SRCDIR)/mdm.c $(SRCDIR)/figlet.c $(SRCDIR)/config.c
 OBJECTS = $(patsubst $(SRCDIR)/%.c,$(BUILDDIR)/%.o,$(SOURCES))
 
 all: $(TARGET)
@@ -35,18 +35,19 @@ install: $(TARGET)
 	install -Dm644 mdm.service $(DESTDIR)/etc/systemd/system/mdm.service
 	install -Dm644 pam.d/mdm $(DESTDIR)$(PAMDIR)/mdm
 	install -Dm644 assets/standard.flf $(DESTDIR)$(SHAREDIR)/standard.flf
+	install -Dm644 mdm.conf $(DESTDIR)$(CONFDIR)/mdm.conf
 	@echo ""
 	@echo "Installation complete! To enable:"
 	@echo "  sudo systemctl enable mdm"
 	@echo "  sudo systemctl start mdm"
+	@echo "  Edit /etc/mdm/mdm.conf to customize colors"
 	@echo ""
-	@echo "MDM will auto-detect users and sessions - no config needed!"
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/$(TARGET)
 	rm -f $(DESTDIR)/etc/systemd/system/mdm.service
 	rm -f $(DESTDIR)$(PAMDIR)/mdm
 	rm -f $(DESTDIR)$(SHAREDIR)/standard.flf
-	@echo "Note: $(CONFDIR)/config left intact for safety"
+	@echo "Note: $(CONFDIR)/mdm.conf left intact for safety"
 
 .PHONY: all clean install uninstall
