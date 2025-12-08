@@ -1,0 +1,17 @@
+[Unit]
+Description=TermDM - Terminal Display Manager
+After=systemd-user-sessions.service
+After=plymouth-quit-wait.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/termdm
+Restart=always
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty7
+TTYReset=yes
+TTYVHangup=yes
+
+[Install]
+WantedBy=multi-user.target
