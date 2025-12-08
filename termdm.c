@@ -156,6 +156,9 @@ static void detect_sessions(void) {
         struct dirent *entry;
         while ((entry = readdir(dir)) != NULL) {
             if (strstr(entry->d_name, ".desktop")) {
+                if (strstr(entry->d_name, "uwsm")) {
+                    continue;
+                }
                 char path[512];
                 snprintf(path, sizeof(path), "%s/%s", dirs[d], entry->d_name);
                 parse_desktop_file(path, types[d]);
@@ -396,7 +399,12 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                         } else {
                             current_session = (current_session + 1) % session_count;
                         }
-                        printf("\033[%d;%dH                                        ", session_row, center_col - 20);
+                        int clear_width = 50;
+                        int clear_start = center_col - clear_width / 2;
+                        printf("\033[%d;%dH", session_row, clear_start);
+                        for (int i = 0; i < clear_width; i++) {
+                            printf("─");
+                        }
                         draw_session_selector(session_row, center_col, 1);
                         fflush(stdout);
                     }
