@@ -541,7 +541,7 @@ static int display_login(char *password, char *username) {
     int center_col = start_col + box_width / 2 + 1;
 
     int input_row = start_row + 10;
-    int input_col = start_col + 4;
+    int input_col = start_col + 3;
     int input_width = box_width - 6;
 
     draw_box(input_row, input_col, input_width, 1);
