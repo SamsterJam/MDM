@@ -457,7 +457,7 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                 printf("\033[2J\033[H\033[?25l");
                 draw_box(start_row, start_col, box_width, 13);
                 draw_title(start_row, start_col, box_width, username, 0);
-                draw_box(pass_row - 1, start_col + 4, box_width - 6, 1);
+                draw_box(pass_row - 1, start_col + 3, box_width - 6, 1);
                 draw_password(pass_row, pass_col, *pass_pos);
                 draw_session_selector(session_row, center_col, 0);
             }
@@ -467,14 +467,14 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                 printf("\033[2J\033[H\033[?25l");
                 draw_box(start_row, start_col, box_width, 13);
                 draw_title(start_row, start_col, box_width, username, 0);
-                draw_box(pass_row - 1, start_col + 4, box_width - 6, 1);
+                draw_box(pass_row - 1, start_col + 3, box_width - 6, 1);
                 draw_password(pass_row, pass_col, *pass_pos);
                 draw_session_selector(session_row, center_col, 0);
             } else if (*active_field == 0 && !*user_edit_mode) {
                 printf("\033[2J\033[H\033[?25l");
                 draw_box(start_row, start_col, box_width, 13);
                 draw_title(start_row, start_col, box_width, username, 1);
-                draw_box(pass_row - 1, start_col + 4, box_width - 6, 1);
+                draw_box(pass_row - 1, start_col + 3, box_width - 6, 1);
                 draw_password(pass_row, pass_col, *pass_pos);
                 draw_session_selector(session_row, center_col, 0);
             }
@@ -523,7 +523,7 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                     printf("\033[2J\033[H\033[?25l");
                     draw_box(start_row, start_col, box_width, 13);
                     draw_title(start_row, start_col, box_width, username, 1);
-                    draw_box(pass_row - 1, start_col + 4, box_width - 6, 1);
+                    draw_box(pass_row - 1, start_col + 3, box_width - 6, 1);
                     draw_password(pass_row, pass_col, *pass_pos);
                     draw_session_selector(session_row, center_col, 0);
                     fflush(stdout);
