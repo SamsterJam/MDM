@@ -555,7 +555,7 @@ static int display_login(char *password, char *username) {
     return 1;
 }
 
-static void setup_user_environment(struct passwd *pw) {
+static void setup_user_environment(struct passwd *pw, const char *session_type) {
     char xauth_path[256];
     char runtime_dir[256];
 
@@ -573,10 +573,12 @@ static void setup_user_environment(struct passwd *pw) {
     snprintf(runtime_dir, sizeof(runtime_dir), "/run/user/%d", pw->pw_uid);
     setenv("XDG_RUNTIME_DIR", runtime_dir, 1);
 
-    setenv("XDG_SESSION_TYPE", "x11", 1);
+    setenv("XDG_SESSION_TYPE", session_type, 1);
     setenv("XDG_SESSION_CLASS", "user", 1);
     setenv("XDG_SEAT", "seat0", 1);
     setenv("XDG_VTNR", "1", 1);
+    setenv("XDG_SESSION_DESKTOP", sessions[current_session].name, 1);
+    setenv("XDG_CURRENT_DESKTOP", sessions[current_session].name, 1);
 
     if (chdir(pw->pw_dir) != 0) {
         chdir("/");
@@ -617,18 +619,32 @@ static int start_session(const char *username, pam_handle_t *pamh) {
     }
 
     if (pid == 0) {
+        setup_user_environment(pw, sessions[current_session].type);
+
         if (pam_open_session(pamh, 0) != PAM_SUCCESS) {
             fprintf(stderr, "Failed to open PAM session\n");
             exit(1);
         }
 
-        setup_user_environment(pw);
-
-        if (strcmp(sessions[current_session].type, "wayland") == 0) {
-            setenv("XDG_SESSION_TYPE", "wayland", 1);
-        } else {
-            setenv("XDG_SESSION_TYPE", "x11", 1);
+        /* Import environment variables from PAM (set by pam_systemd) */
+        char **pam_env = pam_getenvlist(pamh);
+        if (pam_env) {
+            for (int i = 0; pam_env[i]; i++) {
+                char *eq = strchr(pam_env[i], '=');
+                if (eq) {
+                    *eq = '\0';
+                    setenv(pam_env[i], eq + 1, 1);
+                    *eq = '=';
+                }
+                free(pam_env[i]);
+            }
+            free(pam_env);
         }
+
+        /* Set dbus session address for systemd user sessions */
+        char dbus_addr[256];
+        snprintf(dbus_addr, sizeof(dbus_addr), "unix:path=/run/user/%d/bus", pw->pw_uid);
+        setenv("DBUS_SESSION_BUS_ADDRESS", dbus_addr, 1);
 
         if (init_groups(pw) != 0) {
             exit(1);
