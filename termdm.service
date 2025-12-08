@@ -2,16 +2,19 @@
 Description=TermDM - Terminal Display Manager
 After=systemd-user-sessions.service
 After=plymouth-quit-wait.service
+Conflicts=getty@tty1.service
+After=getty@tty1.service
 
 [Service]
-Type=simple
+Type=idle
 ExecStart=/usr/local/bin/termdm
 Restart=always
 StandardInput=tty
 StandardOutput=tty
-TTYPath=/dev/tty7
+TTYPath=/dev/tty1
 TTYReset=yes
 TTYVHangup=yes
+TTYVTDisallocate=yes
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=graphical.target

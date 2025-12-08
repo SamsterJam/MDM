@@ -1,0 +1,7 @@
+#%PAM-1.0
+
+# Include standard login stack for proper session setup
+auth       include      login
+account    include      login
+password   include      login
+session    include      login
