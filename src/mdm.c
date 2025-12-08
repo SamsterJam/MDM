@@ -7,7 +7,7 @@
  * - PAM authentication
  * - Clean TUI with keyboard navigation
  * - Supports both X11 and Wayland
- * - Built-in FIGlet-style font rendering
+ * - Vendored FIGlet font rendering with proper smushing
  */
 
 #include <stdio.h>
@@ -27,7 +27,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <fcntl.h>
-#include "ascii.h"
+#include "figlet.h"
 
 #define MAX_PASSWORD 256
 #define MAX_USERS 64
@@ -290,8 +290,8 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
         line_buffers[i][0] = '\0';
     }
 
-    /* Render the username using ASCII art */
-    line_count = ascii_render(username, lines, 32);
+    /* Render the username using FIGlet */
+    line_count = figlet_render(username, lines, 32);
 
     if (line_count == 0) {
         return;
@@ -754,8 +754,8 @@ int main(void) {
         return 1;
     }
 
-    /* Initialize ASCII art font */
-    if (ascii_init(FONT_FILE) != 0) {
+    /* Initialize FIGlet font */
+    if (figlet_init(FONT_FILE) != 0) {
         fprintf(stderr, "Warning: Could not load font file %s\n", FONT_FILE);
     }
 
@@ -821,6 +821,6 @@ int main(void) {
 
     printf("\033[?25h\033[2J\033[H");
 
-    ascii_cleanup();
+    figlet_cleanup();
     return 0;
 }
