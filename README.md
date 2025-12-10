@@ -4,6 +4,9 @@ A minimal customizable display manager with a clean TUI.
 
 No external binaries or libraries needed (except PAM for authentication).
 
+
+![MDM Preview](https://samsterjam.com/MDMGithubPicture.png)
+
 ## Features
 
 - Auto-detects system users (UID >= 1000)
