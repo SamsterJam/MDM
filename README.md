@@ -1,8 +1,8 @@
 # MDM - Minimal Display Manager
 
-A minimal display manager with a clean TUI, inspired by ly and sddm.
+A minimal customizable display manager with a clean TUI. 
 
-**Zero dependencies** - no external binaries or libraries needed (except PAM for authentication).
+No external binaries or libraries needed (except PAM for authentication).
 
 ## Features
 
@@ -24,11 +24,24 @@ sudo systemctl enable mdm
 sudo systemctl start mdm
 ```
 
+Be sure to disable your current display manager e.g.
+
+```bash
+sudo systemctl disable sddm.service
+```
+
+## Configuration
+
+You can configure the colors applied to the TTY login screen at `/etc/mdm/mdm.conf`
+
+
 ## Usage
 
-MDM automatically detects all available users and sessions. No configuration file needed!
+MDM automatically detects all available users and sessions.
 
-The UI starts with focus on the password field for quick login. The session selector appears centered below the password field.
+The session selector appears centered below the password field. Hotkeys for suspend, shutdown, and reboot planned.
+
+Selecting the ascii art username and hitting enter lets you edit/change the user who is logging in. You can specify capitalization which is used for the figlet ascii art, but is lowercased when used to sign in.
 
 ### Navigation
 
@@ -53,20 +66,8 @@ MDM reads `.desktop` files from:
 
 If no sessions are found, it defaults to `startx`.
 
-### State Persistence
-Last selected user and session are saved to `/var/cache/mdm/state` and automatically restored on next login.
-
 ### Font Rendering
-MDM includes a lightweight FIGlet font parser that reads the standard font file directly - no external `figlet` binary required!
-
-## Files
-
-- `mdm.c` - Main source
-- `ascii.c` / `ascii.h` - ASCII art font rendering engine
-- `mdm.service` - Systemd service unit
-- `pam.d/mdm` - PAM configuration
-- `standard.flf` - FIGlet font file
-- `Makefile` - Build and installation
+MDM includes a lightweight FIGlet font parser that reads the standard font file directly - no external `figlet` binary required.
 
 ## Troubleshooting
 

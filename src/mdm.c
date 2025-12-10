@@ -1,13 +1,6 @@
 /*
  * MDM - Minimal Display Manager
  * A lightweight terminal-based display manager with zero external dependencies
- *
- * Features:
- * - Auto-detects system users and sessions
- * - PAM authentication
- * - Clean TUI with keyboard navigation
- * - Supports both X11 and Wayland
- * - Vendored FIGlet font rendering with proper smushing
  */
 
 #include <stdio.h>
@@ -24,7 +17,6 @@
 #include <security/pam_appl.h>
 #include <security/pam_misc.h>
 #include <termios.h>
-#include <signal.h>
 #include <errno.h>
 #include <fcntl.h>
 #include "figlet.h"
@@ -143,11 +135,11 @@ static void parse_desktop_file(const char *filepath, const char *type) {
 
     while (fgets(line, sizeof(line), f)) {
         if (strncmp(line, "Name=", 5) == 0) {
-            strncpy(name, line + 5, MAX_NAME - 1);
+            snprintf(name, MAX_NAME, "%.127s", line + 5);
             char *nl = strchr(name, '\n');
             if (nl) *nl = '\0';
         } else if (strncmp(line, "Exec=", 5) == 0) {
-            strncpy(exec, line + 5, 255);
+            snprintf(exec, sizeof(exec), "%.255s", line + 5);
             char *nl = strchr(exec, '\n');
             if (nl) *nl = '\0';
         }
@@ -156,9 +148,9 @@ static void parse_desktop_file(const char *filepath, const char *type) {
     fclose(f);
 
     if (name[0] && exec[0] && session_count < MAX_SESSIONS) {
-        strncpy(sessions[session_count].name, name, MAX_NAME - 1);
-        strncpy(sessions[session_count].exec, exec, 255);
-        strncpy(sessions[session_count].type, type, 15);
+        snprintf(sessions[session_count].name, MAX_NAME, "%s", name);
+        snprintf(sessions[session_count].exec, sizeof(sessions[session_count].exec), "%s", exec);
+        snprintf(sessions[session_count].type, sizeof(sessions[session_count].type), "%s", type);
         session_count++;
     }
 }
@@ -301,22 +293,22 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
     int max_width;
     int use_plain_text = 0;
 
-    /* Initialize line pointers */
+    // Initialize line pointers
     for (int i = 0; i < 32; i++) {
         lines[i] = line_buffers[i];
         line_buffers[i][0] = '\0';
     }
 
-    /* Try rendering with standard font first (already loaded) */
+    // Try rendering with standard font first (already loaded)
     line_count = figlet_render(username, lines, 32);
 
     if (line_count > 0) {
         max_width = get_max_line_width(lines, line_count);
 
-        /* If too wide, try small font */
+        // If too wide, try small font
         if (max_width >= box_width) {
             if (figlet_init(FONT_FILE_SMALL) == 0) {
-                /* Clear buffers */
+                // Clear buffers
                 for (int i = 0; i < 32; i++) {
                     line_buffers[i][0] = '\0';
                 }
@@ -327,10 +319,10 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
             }
         }
 
-        /* If still too wide, try mini font */
+        // If still too wide, try mini font
         if (max_width >= box_width) {
             if (figlet_init(FONT_FILE_MINI) == 0) {
-                /* Clear buffers */
+                // Clear buffers
                 for (int i = 0; i < 32; i++) {
                     line_buffers[i][0] = '\0';
                 }
@@ -341,7 +333,7 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
             }
         }
 
-        /* If still too wide, fall back to plain text */
+        // If still too wide, fall back to plain text
         if (max_width >= box_width) {
             use_plain_text = 1;
         }
@@ -350,17 +342,17 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
     }
 
     const char *color_start = highlighted ?
-        config_get_ansi_color(&colors, "ascii_highlight") :
-        config_get_ansi_color(&colors, "ascii_art");
+        config_get_ansi_color("ascii_highlight") :
+        config_get_ansi_color("ascii_art");
 
     if (use_plain_text) {
-        /* Render as plain text centered in the box (moved down 2 lines) */
+        // Render as plain text centered in the box
         int len = strlen(username);
         int col = start_col + (box_width - len) / 2 + 1;
         if (col < start_col + 1) col = start_col + 1;
         printf("\033[%d;%dH%s%s\033[0m", start_row + 5, col, color_start, username);
     } else {
-        /* Render the ASCII art */
+        // Render the ASCII art
         for (int i = 0; i < line_count; i++) {
             int len = strlen(lines[i]);
             int col = start_col + (box_width - len) / 2 + 1;
@@ -369,7 +361,7 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
         }
     }
 
-    /* Reload standard font for next call */
+    // Reload standard font for next call
     figlet_init(FONT_FILE);
 }
 
@@ -379,16 +371,16 @@ static void draw_session_selector(int row, int col, int is_active) {
 
     if (is_active) {
         snprintf(display, sizeof(display), "%s<%s %s%s%s %s>%s",
-                config_get_ansi_color(&colors, "selector"),
+                config_get_ansi_color("selector"),
                 "\033[0m",
-                config_get_ansi_color(&colors, "session"),
+                config_get_ansi_color("session"),
                 sessions[current_session].name,
                 "\033[0m",
-                config_get_ansi_color(&colors, "selector"),
+                config_get_ansi_color("selector"),
                 "\033[0m");
     } else {
         snprintf(display, sizeof(display), "%s  %s  \033[0m",
-                config_get_ansi_color(&colors, "session_dim"),
+                config_get_ansi_color("session_dim"),
                 sessions[current_session].name);
     }
 
@@ -429,8 +421,7 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
     new.c_lflag &= ~(ECHO | ICANON);
     tcsetattr(STDIN_FILENO, TCSANOW, &new);
 
-    strncpy(original_username, username, MAX_NAME - 1);
-    original_username[MAX_NAME - 1] = '\0';
+    snprintf(original_username, MAX_NAME, "%s", username);
 
     while (1) {
         if (*active_field == 0 && *user_edit_mode) {
@@ -512,12 +503,10 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
             if (*user_edit_mode) {
                 if (c == '\n' || c == '\r') {
                     if (strlen(username) == 0) {
-                        strncpy(username, original_username, MAX_NAME - 1);
-                        username[MAX_NAME - 1] = '\0';
+                        snprintf(username, MAX_NAME, "%s", original_username);
                         *user_pos = strlen(username);
                     } else {
-                        strncpy(original_username, username, MAX_NAME - 1);
-                        original_username[MAX_NAME - 1] = '\0';
+                        snprintf(original_username, MAX_NAME, "%s", username);
                     }
                     *user_edit_mode = 0;
                     printf("\033[2J\033[H\033[?25l");
@@ -627,7 +616,7 @@ static int display_login(char *password, char *username) {
 
     if (strlen(password) == 0) {
         printf("\033[%d;%dH%sPassword cannot be empty\033[0m", input_row + 2, input_col + 2,
-               config_get_ansi_color(&colors, "error"));
+               config_get_ansi_color("error"));
         fflush(stdout);
         sleep(1);
         return 0;
@@ -707,7 +696,7 @@ static int start_session(const char *username, pam_handle_t *pamh) {
             exit(1);
         }
 
-        /* Import environment variables from PAM (set by pam_systemd) */
+        // Import environment variables from PAM (set by pam_systemd)
         char **pam_env = pam_getenvlist(pamh);
         if (pam_env) {
             for (int i = 0; pam_env[i]; i++) {
@@ -722,7 +711,7 @@ static int start_session(const char *username, pam_handle_t *pamh) {
             free(pam_env);
         }
 
-        /* Set dbus session address for systemd user sessions */
+        // Set dbus session address for systemd user sessions
         char dbus_addr[256];
         snprintf(dbus_addr, sizeof(dbus_addr), "unix:path=/run/user/%d/bus", pw->pw_uid);
         setenv("DBUS_SESSION_BUS_ADDRESS", dbus_addr, 1);
@@ -828,13 +817,13 @@ int main(void) {
         return 1;
     }
 
-    /* Load color configuration */
+    // Load color configuration
     config_load(CONFIG_FILE, &colors);
 
-    /* Apply TTY color palette */
+    // Apply TTY color palette
     config_apply_tty_colors(&colors);
 
-    /* Initialize FIGlet font */
+    // Initialize FIGlet font
     if (figlet_init(FONT_FILE) != 0) {
         fprintf(stderr, "Warning: Could not load font file %s\n", FONT_FILE);
     }
@@ -869,7 +858,7 @@ int main(void) {
         int msg_row = term_rows / 2;
         int msg_col = (term_cols - 20) / 2;
         printf("\033[%d;%dH%sAuthenticating...\033[0m", msg_row, msg_col,
-               config_get_ansi_color(&colors, "info"));
+               config_get_ansi_color("info"));
         fflush(stdout);
 
         char username_lower[MAX_NAME];
@@ -894,7 +883,7 @@ int main(void) {
             int err_row = term_rows / 2;
             int err_col = (term_cols - 25) / 2;
             printf("\033[%d;%dH%sAuthentication failed!\033[0m", err_row, err_col,
-                   config_get_ansi_color(&colors, "error"));
+                   config_get_ansi_color("error"));
             fflush(stdout);
             sleep(2);
             memset(password, 0, sizeof(password));

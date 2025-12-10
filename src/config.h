@@ -1,7 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-/* Color configuration structure */
+// Color configuration structure
 typedef struct {
     char background[7];
     char border[7];
@@ -14,13 +14,13 @@ typedef struct {
     char info[7];
 } ColorConfig;
 
-/* Load configuration from file */
+// Load configuration from file
 int config_load(const char *config_path, ColorConfig *config);
 
-/* Apply TTY color palette based on config */
+// Apply TTY color palette based on config
 void config_apply_tty_colors(const ColorConfig *config);
 
-/* Get ANSI color code for a specific UI element */
-const char* config_get_ansi_color(const ColorConfig *config, const char *element);
+// Get ANSI color code for a specific UI element
+const char* config_get_ansi_color(const char *element);
 
 #endif /* CONFIG_H */
