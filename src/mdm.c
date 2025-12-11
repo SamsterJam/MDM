@@ -409,6 +409,42 @@ static void to_lowercase(char *dest, const char *src, size_t size) {
     dest[i] = '\0';
 }
 
+static int get_function_key_num(const char *hotkey) {
+    if (!hotkey || (hotkey[0] != 'F' && hotkey[0] != 'f'))
+        return 0;
+    int key_num = atoi(hotkey + 1);
+    return (key_num >= 1 && key_num <= 12) ? key_num : 0;
+}
+
+static int check_hotkey_match(char bracket_code, char seq_c1, char seq_c2, char tilde, int target_key) {
+    if (!target_key) return 0;
+
+    // F1-F5: ESC [ [ A-E
+    if (bracket_code && target_key >= 1 && target_key <= 5) {
+        return bracket_code == ('A' + target_key - 1);
+    }
+
+    // F6-F12: ESC [ XY~
+    if (tilde == '~' && target_key >= 6 && target_key <= 12) {
+        const char *seqs[] = {"", "", "", "", "", "17", "18", "19", "20", "21", "23", "24"};
+        return (seq_c1 == seqs[target_key - 1][0] && seq_c2 == seqs[target_key - 1][1]);
+    }
+
+    return 0;
+}
+
+static int handle_power_action(struct termios *old, const char *action, const char *cmd) {
+    tcsetattr(STDIN_FILENO, TCSANOW, old);
+    printf("\033[2J\033[H");
+    int msg_len = strlen(action);
+    printf("\033[%d;%dH%s%s\033[0m\n", term_rows / 2, (term_cols - msg_len) / 2,
+           config_get_ansi_color("info"), action);
+    fflush(stdout);
+    system(cmd);
+    printf("\033[?25l");
+    return -2;
+}
+
 static int handle_input(char *username, char *password, int max_len, int *pass_pos, int *user_pos,
                        int *active_field, int *user_edit_mode, int user_row, int pass_row,
                        int pass_col, int session_row, int center_col,
@@ -478,22 +514,48 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
             c = getchar();
             if (c == '[') {
                 c = getchar();
-                if (*active_field == 2) {
-                    if (c == 'D' || c == 'C') {
-                        if (c == 'D') {
-                            current_session = (current_session + session_count - 1) % session_count;
-                        } else {
-                            current_session = (current_session + 1) % session_count;
-                        }
-                        int clear_width = 50;
-                        int clear_start = center_col - clear_width / 2;
-                        printf("\033[%d;%dH", session_row, clear_start);
-                        for (int i = 0; i < clear_width; i++) {
-                            printf("─");
-                        }
-                        draw_session_selector(session_row, center_col, 1);
-                        fflush(stdout);
+
+                int suspend_key = get_function_key_num(colors.suspend_hotkey);
+                int shutdown_key = get_function_key_num(colors.shutdown_hotkey);
+                int reboot_key = get_function_key_num(colors.reboot_hotkey);
+
+                // Handle F1-F5: ESC [ [ X
+                if (c == '[') {
+                    char code = getchar();
+                    if (check_hotkey_match(code, 0, 0, 0, suspend_key))
+                        return handle_power_action(&old, "Suspending...", "systemctl suspend");
+                    if (check_hotkey_match(code, 0, 0, 0, shutdown_key))
+                        return handle_power_action(&old, "Shutting down...", "systemctl poweroff");
+                    if (check_hotkey_match(code, 0, 0, 0, reboot_key))
+                        return handle_power_action(&old, "Rebooting...", "systemctl reboot");
+                    continue;
+                }
+
+                // Handle F6-F12: ESC [ XY~
+                if (c >= '1' && c <= '2') {
+                    char c1 = c, c2 = getchar();
+                    if (c2 >= '0' && c2 <= '9') {
+                        char tilde = getchar();
+                        if (check_hotkey_match(0, c1, c2, tilde, suspend_key))
+                            return handle_power_action(&old, "Suspending...", "systemctl suspend");
+                        if (check_hotkey_match(0, c1, c2, tilde, shutdown_key))
+                            return handle_power_action(&old, "Shutting down...", "systemctl poweroff");
+                        if (check_hotkey_match(0, c1, c2, tilde, reboot_key))
+                            return handle_power_action(&old, "Rebooting...", "systemctl reboot");
                     }
+                    continue;
+                }
+
+                // Handle arrow keys for session selection
+                if (*active_field == 2 && (c == 'D' || c == 'C')) {
+                    current_session = (c == 'D') ?
+                        (current_session + session_count - 1) % session_count :
+                        (current_session + 1) % session_count;
+                    int clear_start = center_col - 25;
+                    printf("\033[%d;%dH", session_row, clear_start);
+                    for (int i = 0; i < 50; i++) printf("─");
+                    draw_session_selector(session_row, center_col, 1);
+                    fflush(stdout);
                 }
             }
             continue;

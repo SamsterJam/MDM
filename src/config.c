@@ -13,6 +13,9 @@ static void config_set_defaults(ColorConfig *config) {
     strcpy(config->password, "ffffff");
     strcpy(config->error, "e06c75");
     strcpy(config->info, "98c379");
+    strcpy(config->suspend_hotkey, "F3");
+    strcpy(config->shutdown_hotkey, "F4");
+    strcpy(config->reboot_hotkey, "F5");
 }
 
 static void trim(char *str) {
@@ -74,30 +77,43 @@ int config_load(const char *config_path, ColorConfig *config) {
         trim(key);
         trim(value);
 
-        if (!is_valid_hex(value)) {
-            fprintf(stderr, "Warning: Invalid hex color '%s' for '%s'\n", value, key);
-            continue;
-        }
+        // Hotkey settings don't need hex validation
+        if (strcmp(key, "suspend_hotkey") == 0) {
+            strncpy(config->suspend_hotkey, value, 4);
+            config->suspend_hotkey[4] = '\0';
+        } else if (strcmp(key, "shutdown_hotkey") == 0) {
+            strncpy(config->shutdown_hotkey, value, 4);
+            config->shutdown_hotkey[4] = '\0';
+        } else if (strcmp(key, "reboot_hotkey") == 0) {
+            strncpy(config->reboot_hotkey, value, 4);
+            config->reboot_hotkey[4] = '\0';
+        } else {
+            // Color settings need hex validation
+            if (!is_valid_hex(value)) {
+                fprintf(stderr, "Warning: Invalid hex color '%s' for '%s'\n", value, key);
+                continue;
+            }
 
-        // Map to config structure
-        if (strcmp(key, "background") == 0) {
-            strncpy(config->background, value, 6);
-        } else if (strcmp(key, "border") == 0) {
-            strncpy(config->border, value, 6);
-        } else if (strcmp(key, "ascii_art") == 0) {
-            strncpy(config->ascii_art, value, 6);
-        } else if (strcmp(key, "ascii_highlight") == 0) {
-            strncpy(config->ascii_highlight, value, 6);
-        } else if (strcmp(key, "selector") == 0) {
-            strncpy(config->selector, value, 6);
-        } else if (strcmp(key, "session") == 0) {
-            strncpy(config->session, value, 6);
-        } else if (strcmp(key, "password") == 0) {
-            strncpy(config->password, value, 6);
-        } else if (strcmp(key, "error") == 0) {
-            strncpy(config->error, value, 6);
-        } else if (strcmp(key, "info") == 0) {
-            strncpy(config->info, value, 6);
+            // Map to config structure
+            if (strcmp(key, "background") == 0) {
+                strncpy(config->background, value, 6);
+            } else if (strcmp(key, "border") == 0) {
+                strncpy(config->border, value, 6);
+            } else if (strcmp(key, "ascii_art") == 0) {
+                strncpy(config->ascii_art, value, 6);
+            } else if (strcmp(key, "ascii_highlight") == 0) {
+                strncpy(config->ascii_highlight, value, 6);
+            } else if (strcmp(key, "selector") == 0) {
+                strncpy(config->selector, value, 6);
+            } else if (strcmp(key, "session") == 0) {
+                strncpy(config->session, value, 6);
+            } else if (strcmp(key, "password") == 0) {
+                strncpy(config->password, value, 6);
+            } else if (strcmp(key, "error") == 0) {
+                strncpy(config->error, value, 6);
+            } else if (strcmp(key, "info") == 0) {
+                strncpy(config->info, value, 6);
+            }
         }
     }
 

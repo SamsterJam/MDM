@@ -42,7 +42,7 @@ You can configure the colors applied to the TTY login screen at `/etc/mdm/mdm.co
 
 MDM automatically detects all available users and sessions.
 
-The session selector appears centered below the password field. Hotkeys for suspend, shutdown, and reboot planned.
+The session selector appears centered below the password field.
 
 Selecting the ascii art username and hitting enter lets you edit/change the user who is logging in. You can specify capitalization which is used for the figlet ascii art, but is lowercased when used to sign in.
 
@@ -51,7 +51,12 @@ Selecting the ascii art username and hitting enter lets you edit/change the user
 - **Enter**: Submit password and login (when on password field)
 - **Tab**: Switch between password field and session selector
 - **Left/Right Arrow Keys**: Change session (when focused on session selector)
+- **F3**: Suspend system
+- **F4**: Shutdown system
+- **F5**: Reboot system
 - **Ctrl+C**: Exit
+
+Power hotkeys are customizable
 
 Your last selected user and session are remembered in `/var/cache/mdm/state`.
 

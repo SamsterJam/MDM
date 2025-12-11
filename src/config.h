@@ -12,6 +12,9 @@ typedef struct {
     char password[7];
     char error[7];
     char info[7];
+    char suspend_hotkey[5];    // e.g., "F3" or "F12"
+    char shutdown_hotkey[5];   // e.g., "F4"
+    char reboot_hotkey[5];     // e.g., "F5"
 } ColorConfig;
 
 // Load configuration from file
