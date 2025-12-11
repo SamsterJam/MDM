@@ -13,9 +13,11 @@ static void config_set_defaults(ColorConfig *config) {
     strcpy(config->password, "ffffff");
     strcpy(config->error, "e06c75");
     strcpy(config->info, "98c379");
+    strcpy(config->power_hotkeys, "abb2bf");
     strcpy(config->suspend_hotkey, "F3");
     strcpy(config->shutdown_hotkey, "F4");
     strcpy(config->reboot_hotkey, "F5");
+    config->show_power_hotkeys = 1;
 }
 
 static void trim(char *str) {
@@ -77,8 +79,16 @@ int config_load(const char *config_path, ColorConfig *config) {
         trim(key);
         trim(value);
 
+        // Boolean settings
+        if (strcmp(key, "show_power_hotkeys") == 0) {
+            if (strcmp(value, "true") == 0 || strcmp(value, "1") == 0) {
+                config->show_power_hotkeys = 1;
+            } else if (strcmp(value, "false") == 0 || strcmp(value, "0") == 0) {
+                config->show_power_hotkeys = 0;
+            }
+        }
         // Hotkey settings don't need hex validation
-        if (strcmp(key, "suspend_hotkey") == 0) {
+        else if (strcmp(key, "suspend_hotkey") == 0) {
             strncpy(config->suspend_hotkey, value, 4);
             config->suspend_hotkey[4] = '\0';
         } else if (strcmp(key, "shutdown_hotkey") == 0) {
@@ -113,6 +123,8 @@ int config_load(const char *config_path, ColorConfig *config) {
                 strncpy(config->error, value, 6);
             } else if (strcmp(key, "info") == 0) {
                 strncpy(config->info, value, 6);
+            } else if (strcmp(key, "power_hotkeys") == 0) {
+                strncpy(config->power_hotkeys, value, 6);
             }
         }
     }
@@ -131,7 +143,7 @@ void config_apply_tty_colors(const ColorConfig *config) {
      * 5 = selector (magenta slot)
      * 6 = ascii_highlight (cyan slot)
      * 7 = ascii_art (white slot)
-     * 8 = dim (bright black)
+     * 8 = power_hotkeys (bright black/dim)
      * 9-15 = unused for now
      */
 
@@ -143,7 +155,7 @@ void config_apply_tty_colors(const ColorConfig *config) {
     printf("\e]P5%s", config->selector);
     printf("\e]P6%s", config->ascii_highlight);
     printf("\e]P7%s", config->ascii_art);
-    printf("\e]P8%s", "5c6370");
+    printf("\e]P8%s", config->power_hotkeys);
     printf("\e]P9%s", config->error);
     printf("\e]PA%s", config->info);
     printf("\e]PB%s", config->session);
@@ -179,6 +191,8 @@ const char* config_get_ansi_color(const char *element) {
         return "\033[31m";
     } else if (strcmp(element, "info") == 0) {
         return "\033[32m";
+    } else if (strcmp(element, "power_hotkeys") == 0) {
+        return "\033[90m";
     }
 
     return "\033[0m";

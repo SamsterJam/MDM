@@ -397,6 +397,36 @@ static void draw_password(int row, int col, int pass_pos) {
     fflush(stdout);
 }
 
+static void draw_power_hotkeys(void) {
+    if (!colors.show_power_hotkeys) {
+        return;
+    }
+
+    const char *color = config_get_ansi_color("power_hotkeys");
+    char suspend_hint[32], shutdown_hint[32], reboot_hint[32];
+
+    snprintf(suspend_hint, sizeof(suspend_hint), "%s to Suspend", colors.suspend_hotkey);
+    snprintf(shutdown_hint, sizeof(shutdown_hint), "%s to Shutdown", colors.shutdown_hotkey);
+    snprintf(reboot_hint, sizeof(reboot_hint), "%s to Reboot", colors.reboot_hotkey);
+
+    int bottom_row = term_rows - 1;
+
+    // Left: Suspend
+    printf("\033[%d;2H%s%s\033[0m", bottom_row, color, suspend_hint);
+
+    // Center: Shutdown
+    int shutdown_len = strlen(shutdown_hint);
+    int center_col = (term_cols - shutdown_len) / 2;
+    printf("\033[%d;%dH%s%s\033[0m", bottom_row, center_col, color, shutdown_hint);
+
+    // Right: Reboot
+    int reboot_len = strlen(reboot_hint);
+    int right_col = term_cols - reboot_len - 1;
+    printf("\033[%d;%dH%s%s\033[0m", bottom_row, right_col, color, reboot_hint);
+
+    fflush(stdout);
+}
+
 static void to_lowercase(char *dest, const char *src, size_t size) {
     size_t i;
     for (i = 0; i < size - 1 && src[i] != '\0'; i++) {
@@ -487,6 +517,7 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                 draw_box(pass_row - 1, start_col + 3, box_width - 6, 1);
                 draw_password(pass_row, pass_col, *pass_pos);
                 draw_session_selector(session_row, center_col, 0);
+                draw_power_hotkeys();
             }
             int old_field = *active_field;
             *active_field = (*active_field + 1) % 3;
@@ -497,6 +528,7 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                 draw_box(pass_row - 1, start_col + 3, box_width - 6, 1);
                 draw_password(pass_row, pass_col, *pass_pos);
                 draw_session_selector(session_row, center_col, 0);
+                draw_power_hotkeys();
             } else if (*active_field == 0 && !*user_edit_mode) {
                 printf("\033[2J\033[H\033[?25l");
                 draw_box(start_row, start_col, box_width, 13);
@@ -504,6 +536,7 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                 draw_box(pass_row - 1, start_col + 3, box_width - 6, 1);
                 draw_password(pass_row, pass_col, *pass_pos);
                 draw_session_selector(session_row, center_col, 0);
+                draw_power_hotkeys();
             }
             draw_session_selector(session_row, center_col, *active_field == 2);
             fflush(stdout);
@@ -577,6 +610,7 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                     draw_box(pass_row - 1, start_col + 3, box_width - 6, 1);
                     draw_password(pass_row, pass_col, *pass_pos);
                     draw_session_selector(session_row, center_col, 0);
+                    draw_power_hotkeys();
                     fflush(stdout);
                 } else if (c == 127 || c == 8) {
                     if (*user_pos > 0) {
@@ -665,6 +699,7 @@ static int display_login(char *password, char *username) {
     int session_row = input_row + 4;
 
     draw_session_selector(session_row, center_col, 0);
+    draw_power_hotkeys();
 
     int active_field = 1;
     int pass_pos = 0;
@@ -869,12 +904,12 @@ static int start_session(const char *username, pam_handle_t *pamh) {
         exit(1);
     }
 
-    // Parent process - wait for session to complete
+    // Parent process
     int status;
     waitpid(pid, &status, 0);
 
-    // Close PAM session after child exits
-    // This allows pam_systemd to clean up /run/user/<uid> and unregister the session
+    // Close PAM session after child exits to allow pam_systemd 
+    // to clean up /run/user/<uid> and unregister the session
     pam_close_session(pamh, 0);
 
     return 0;
