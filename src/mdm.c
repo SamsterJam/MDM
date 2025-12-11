@@ -681,22 +681,24 @@ static int start_session(const char *username, pam_handle_t *pamh) {
         return -1;
     }
 
+    // Open PAM session before forking to allow pam_systemd to create /run/user/<uid> and register the session
+    if (pam_open_session(pamh, 0) != PAM_SUCCESS) {
+        fprintf(stderr, "Failed to open PAM session\n");
+        return -1;
+    }
+
     pid_t pid = fork();
 
     if (pid < 0) {
         perror("fork");
+        pam_close_session(pamh, 0);
         return -1;
     }
 
     if (pid == 0) {
         setup_user_environment(pw, sessions[current_session].type);
 
-        if (pam_open_session(pamh, 0) != PAM_SUCCESS) {
-            fprintf(stderr, "Failed to open PAM session\n");
-            exit(1);
-        }
-
-        // Import environment variables from PAM (set by pam_systemd)
+        // Import environment variables set by pam_systemd
         char **pam_env = pam_getenvlist(pamh);
         if (pam_env) {
             for (int i = 0; pam_env[i]; i++) {
@@ -763,9 +765,12 @@ static int start_session(const char *username, pam_handle_t *pamh) {
         exit(1);
     }
 
+    // Parent process - wait for session to complete
     int status;
     waitpid(pid, &status, 0);
 
+    // Close PAM session after child exits
+    // This allows pam_systemd to clean up /run/user/<uid> and unregister the session
     pam_close_session(pamh, 0);
 
     return 0;
