@@ -625,9 +625,37 @@ static int display_login(char *password, char *username) {
     return 1;
 }
 
-static void setup_user_environment(struct passwd *pw, const char *session_type) {
+static int get_vt_number(void) {
+    // Get the current TTY device name
+    char *tty = ttyname(STDIN_FILENO);
+    if (!tty) {
+        tty = ttyname(STDOUT_FILENO);
+    }
+    if (!tty) {
+        // Fallback to tty1
+        return 1;
+    }
+
+    char *vt_str = NULL;
+    if (strncmp(tty, "/dev/tty", 8) == 0) {
+        vt_str = tty + 8;
+    } else if (strncmp(tty, "/dev/vc/", 8) == 0) {
+        vt_str = tty + 8;
+    }
+
+    if (vt_str && *vt_str >= '0' && *vt_str <= '9') {
+        return atoi(vt_str);
+    }
+
+    // Default to VT1
+    return 1;
+}
+
+static void setup_user_environment(struct passwd *pw, const char *session_type, int vt_number) {
     char xauth_path[256];
     char runtime_dir[256];
+    char display[16];
+    char vtnr[8];
 
     setenv("HOME", pw->pw_dir, 1);
     setenv("SHELL", pw->pw_shell, 1);
@@ -635,7 +663,9 @@ static void setup_user_environment(struct passwd *pw, const char *session_type) 
     setenv("LOGNAME", pw->pw_name, 1);
     setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/bin", 1);
     setenv("PWD", pw->pw_dir, 1);
-    setenv("DISPLAY", ":0", 1);
+
+    snprintf(display, sizeof(display), ":%d", vt_number - 1);
+    setenv("DISPLAY", display, 1);
 
     snprintf(xauth_path, sizeof(xauth_path), "%s/.Xauthority", pw->pw_dir);
     setenv("XAUTHORITY", xauth_path, 1);
@@ -646,7 +676,10 @@ static void setup_user_environment(struct passwd *pw, const char *session_type) 
     setenv("XDG_SESSION_TYPE", session_type, 1);
     setenv("XDG_SESSION_CLASS", "user", 1);
     setenv("XDG_SEAT", "seat0", 1);
-    setenv("XDG_VTNR", "1", 1);
+
+    snprintf(vtnr, sizeof(vtnr), "%d", vt_number);
+    setenv("XDG_VTNR", vtnr, 1);
+
     setenv("XDG_SESSION_DESKTOP", sessions[current_session].name, 1);
     setenv("XDG_CURRENT_DESKTOP", sessions[current_session].name, 1);
 
@@ -681,6 +714,8 @@ static int start_session(const char *username, pam_handle_t *pamh) {
         return -1;
     }
 
+    int vt_number = get_vt_number();
+
     // Open PAM session before forking to allow pam_systemd to create /run/user/<uid> and register the session
     if (pam_open_session(pamh, 0) != PAM_SUCCESS) {
         fprintf(stderr, "Failed to open PAM session\n");
@@ -696,7 +731,7 @@ static int start_session(const char *username, pam_handle_t *pamh) {
     }
 
     if (pid == 0) {
-        setup_user_environment(pw, sessions[current_session].type);
+        setup_user_environment(pw, sessions[current_session].type, vt_number);
 
         // Import environment variables set by pam_systemd
         char **pam_env = pam_getenvlist(pamh);
@@ -726,6 +761,13 @@ static int start_session(const char *username, pam_handle_t *pamh) {
         int argc = 0;
 
         if (strcmp(sessions[current_session].type, "x11") == 0) {
+            // Build xinit command with dynamic display and vt
+            char display_arg[16];
+            char vt_arg[16];
+
+            snprintf(display_arg, sizeof(display_arg), ":%d", vt_number - 1);
+            snprintf(vt_arg, sizeof(vt_arg), "vt%d", vt_number);
+
             argv[argc++] = "xinit";
 
             char *cmd_copy = strdup(sessions[current_session].exec);
@@ -736,8 +778,8 @@ static int start_session(const char *username, pam_handle_t *pamh) {
             }
 
             argv[argc++] = "--";
-            argv[argc++] = ":0";
-            argv[argc++] = "vt1";
+            argv[argc++] = display_arg;
+            argv[argc++] = vt_arg;
             argv[argc] = NULL;
         } else {
             char *cmd_copy = strdup(sessions[current_session].exec);
