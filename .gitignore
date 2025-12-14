@@ -1,6 +1,7 @@
 # Build artifacts
 mdm
 *.o
+!pam.d/mdm
 
 # Editor files
 *.swp
