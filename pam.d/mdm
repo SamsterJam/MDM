@@ -1,13 +1,14 @@
 #%PAM-1.0
 
-# Include standard login stack for proper session setup
-auth       include      login
+# Include system-login for proper graphical session setup
+auth       include      system-login
 auth       optional     pam_gnome_keyring.so
 
-account    include      login
+account    include      system-login
 
-password   include      login
-password   optional     pam_gnome_keyring.so
+password   include      system-login
+password   optional     pam_gnome_keyring.so use_authtok
 
-session    include      login
+session    optional     pam_keyinit.so force revoke
+session    include      system-login
 session    optional     pam_gnome_keyring.so auto_start

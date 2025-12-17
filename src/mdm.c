@@ -815,6 +815,21 @@ static int start_session(const char *username, pam_handle_t *pamh) {
 
     int vt_number = get_vt_number();
 
+    // Set PAM environment variables BEFORE opening session so pam_systemd registers the correct session type
+    char pam_env_buf[256];
+
+    snprintf(pam_env_buf, sizeof(pam_env_buf), "XDG_SESSION_TYPE=%s", sessions[current_session].type);
+    pam_putenv(pamh, pam_env_buf);
+
+    pam_putenv(pamh, "XDG_SESSION_CLASS=user");
+    pam_putenv(pamh, "XDG_SEAT=seat0");
+
+    snprintf(pam_env_buf, sizeof(pam_env_buf), "XDG_VTNR=%d", vt_number);
+    pam_putenv(pamh, pam_env_buf);
+
+    snprintf(pam_env_buf, sizeof(pam_env_buf), "XDG_SESSION_DESKTOP=%s", sessions[current_session].name);
+    pam_putenv(pamh, pam_env_buf);
+
     // Open PAM session before forking to allow pam_systemd to create /run/user/<uid> and register the session
     if (pam_open_session(pamh, 0) != PAM_SUCCESS) {
         fprintf(stderr, "Failed to open PAM session\n");
