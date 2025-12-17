@@ -243,15 +243,32 @@ static void save_state(const char *display_name) {
 
 static void get_term_size(void) {
     struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
-        term_rows = ws.ws_row;
-        term_cols = ws.ws_col;
-    } else {
-        char *lines = getenv("LINES");
-        char *cols = getenv("COLUMNS");
-        if (lines) term_rows = atoi(lines);
-        if (cols) term_cols = atoi(cols);
+    int retries = 10;
+
+    // Retry getting terminal size with small delays
+    // This handles the case where TTY isn't fully initialized on first boot
+    while (retries > 0) {
+        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+            // Check if we got valid dimensions (not 0x0 or too small)
+            if (ws.ws_row > 10 && ws.ws_col > 40) {
+                term_rows = ws.ws_row;
+                term_cols = ws.ws_col;
+                return;
+            }
+        }
+
+        // Small delay before retry (10ms)
+        usleep(10000);
+        retries--;
     }
+
+    // Fallback to environment variables if ioctl keeps failing
+    char *lines = getenv("LINES");
+    char *cols = getenv("COLUMNS");
+    if (lines) term_rows = atoi(lines);
+    if (cols) term_cols = atoi(cols);
+
+    // Final fallback to standard VT100 dimensions
     if (term_rows == 0) term_rows = 24;
     if (term_cols == 0) term_cols = 80;
 }
