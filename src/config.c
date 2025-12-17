@@ -4,19 +4,19 @@
 #include "config.h"
 
 static void config_set_defaults(ColorConfig *config) {
-    strcpy(config->background, "282c34");
-    strcpy(config->border, "61afef");
-    strcpy(config->ascii_art, "ffffff");
-    strcpy(config->ascii_highlight, "56b6c2");
-    strcpy(config->selector, "56b6c2");
-    strcpy(config->session, "abb2bf");
-    strcpy(config->password, "ffffff");
-    strcpy(config->error, "e06c75");
-    strcpy(config->info, "98c379");
-    strcpy(config->power_hotkeys, "abb2bf");
-    strcpy(config->suspend_hotkey, "F3");
-    strcpy(config->shutdown_hotkey, "F4");
-    strcpy(config->reboot_hotkey, "F5");
+    memcpy(config->background, "282c34\0", 7);
+    memcpy(config->border, "61afef\0", 7);
+    memcpy(config->ascii_art, "ffffff\0", 7);
+    memcpy(config->ascii_highlight, "56b6c2\0", 7);
+    memcpy(config->selector, "56b6c2\0", 7);
+    memcpy(config->session, "abb2bf\0", 7);
+    memcpy(config->password, "ffffff\0", 7);
+    memcpy(config->error, "e06c75\0", 7);
+    memcpy(config->info, "98c379\0", 7);
+    memcpy(config->power_hotkeys, "abb2bf\0", 7);
+    memcpy(config->suspend_hotkey, "F3\0", 3);
+    memcpy(config->shutdown_hotkey, "F4\0", 3);
+    memcpy(config->reboot_hotkey, "F5\0", 3);
     config->show_power_hotkeys = 1;
 }
 

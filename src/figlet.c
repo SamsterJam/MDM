@@ -97,8 +97,9 @@ static void readfontchar(FILE *file, int theord) {
         }
 
         templine[k + 1] = '\0';
-        fcharlist->thechar[row] = (char *)myalloc(strlen(templine) + 1);
-        strcpy(fcharlist->thechar[row], templine);
+        size_t len = strlen(templine) + 1;
+        fcharlist->thechar[row] = (char *)myalloc(len);
+        memcpy(fcharlist->thechar[row], templine, len);
     }
 }
 
@@ -200,11 +201,17 @@ static void getletter(int c) {
         /* Use "missing" character (ord=0) */
         for (charptr = fcharlist; charptr != NULL && charptr->ord != 0; charptr = charptr->next)
             ;
-        currchar = charptr->thechar;
+        if (charptr != NULL) {
+            currchar = charptr->thechar;
+        } else {
+            /* Font corrupted or empty - use safe fallback */
+            static char *emptychars[1] = {""};
+            currchar = emptychars;
+        }
     }
 
     previouscharwidth = currcharwidth;
-    currcharwidth = strlen(currchar[0]);
+    currcharwidth = (currchar && currchar[0]) ? strlen(currchar[0]) : 0;
 }
 
 /*

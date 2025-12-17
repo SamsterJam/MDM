@@ -72,6 +72,16 @@ static int pam_conversation(int num_msg, const struct pam_message **msg,
         switch (msg[i]->msg_style) {
             case PAM_PROMPT_ECHO_OFF:
                 reply[i].resp = strdup(password);
+                if (!reply[i].resp) {
+                    /* strdup failed - cleanup and return error */
+                    for (int j = 0; j < i; j++) {
+                        if (reply[j].resp) {
+                            free(reply[j].resp);
+                        }
+                    }
+                    free(reply);
+                    return PAM_BUF_ERR;
+                }
                 reply[i].resp_retcode = 0;
                 break;
             case PAM_PROMPT_ECHO_ON:
@@ -81,6 +91,12 @@ static int pam_conversation(int num_msg, const struct pam_message **msg,
                 reply[i].resp_retcode = 0;
                 break;
             default:
+                /* Cleanup on error */
+                for (int j = 0; j < i; j++) {
+                    if (reply[j].resp) {
+                        free(reply[j].resp);
+                    }
+                }
                 free(reply);
                 return PAM_CONV_ERR;
         }
@@ -203,12 +219,16 @@ static void load_state(char *display_name) {
         char *nl = strchr(value, '\n');
         if (nl) *nl = '\0';
 
-        if (strcmp(line, "last_user") == 0)
+        if (strcmp(line, "last_user") == 0) {
             strncpy(last_user, value, MAX_NAME - 1);
-        else if (strcmp(line, "last_session") == 0)
+            last_user[MAX_NAME - 1] = '\0';
+        } else if (strcmp(line, "last_session") == 0) {
             strncpy(last_session, value, MAX_NAME - 1);
-        else if (strcmp(line, "display_name") == 0)
+            last_session[MAX_NAME - 1] = '\0';
+        } else if (strcmp(line, "display_name") == 0) {
             strncpy(display_name, value, MAX_NAME - 1);
+            display_name[MAX_NAME - 1] = '\0';
+        }
     }
 
     fclose(f);
@@ -234,8 +254,10 @@ static void save_state(const char *display_name) {
     FILE *f = fopen(STATE_FILE, "w");
     if (!f) return;
 
-    fprintf(f, "last_user=%s\n", users[current_user].username);
-    fprintf(f, "last_session=%s\n", sessions[current_session].name);
+    if (current_user >= 0 && current_user < user_count)
+        fprintf(f, "last_user=%s\n", users[current_user].username);
+    if (current_session >= 0 && current_session < session_count)
+        fprintf(f, "last_session=%s\n", sessions[current_session].name);
     fprintf(f, "display_name=%s\n", display_name);
 
     fclose(f);
@@ -249,8 +271,8 @@ static void get_term_size(void) {
     // This handles the case where TTY isn't fully initialized on first boot
     while (retries > 0) {
         if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
-            // Check if we got valid dimensions (not 0x0 or too small)
-            if (ws.ws_row > 10 && ws.ws_col > 40) {
+            // Check if we got valid dimensions (not 0x0, too small, or unreasonably large)
+            if (ws.ws_row > 10 && ws.ws_col > 40 && ws.ws_row < 512 && ws.ws_col < 512) {
                 term_rows = ws.ws_row;
                 term_cols = ws.ws_col;
                 return;
@@ -893,6 +915,8 @@ static int start_session(const char *username, pam_handle_t *pamh) {
         // Declare these outside the if block to ensure they remain in scope
         char display_arg[16];
         char vt_arg[16];
+        char *shell_cmd = NULL;
+        char *cmd_copy = NULL;
 
         if (strcmp(sessions[current_session].type, "x11") == 0) {
             // Build xinit command with dynamic display and vt
@@ -905,7 +929,7 @@ static int start_session(const char *username, pam_handle_t *pamh) {
             argv[argc++] = "-c";
 
             // Build shell command: "exec <session_cmd>"
-            char *shell_cmd = malloc(512);
+            shell_cmd = malloc(512);
             snprintf(shell_cmd, 512, "exec %s", sessions[current_session].exec);
             argv[argc++] = shell_cmd;
 
@@ -914,7 +938,7 @@ static int start_session(const char *username, pam_handle_t *pamh) {
             argv[argc++] = vt_arg;
             argv[argc] = NULL;
         } else {
-            char *cmd_copy = strdup(sessions[current_session].exec);
+            cmd_copy = strdup(sessions[current_session].exec);
             char *token = strtok(cmd_copy, " ");
 
             while (token && argc < 63) {
@@ -952,6 +976,10 @@ static int start_session(const char *username, pam_handle_t *pamh) {
         fflush(stderr);
 
         execvp(argv[0], argv);
+
+        // If execvp returns, it failed - cleanup before exit
+        if (shell_cmd) free(shell_cmd);
+        if (cmd_copy) free(cmd_copy);
 
         fprintf(stderr, "\n=== MDM Session Exec Failed ===\n");
         fprintf(stderr, "Failed to execute %s: %s\n", argv[0], strerror(errno));
@@ -1000,7 +1028,7 @@ static int authenticate(const char *username, const char *password, const char *
 
     retval = pam_start("mdm", username, &conv, &pamh);
     if (retval != PAM_SUCCESS) {
-        fprintf(stderr, "pam_start failed: %s\n", pam_strerror(pamh, retval));
+        fprintf(stderr, "pam_start failed (error code %d)\n", retval);
         return -1;
     }
 
