@@ -780,6 +780,7 @@ static void setup_user_environment(struct passwd *pw, const char *session_type, 
 
     setenv("XDG_SESSION_DESKTOP", sessions[current_session].name, 1);
     setenv("XDG_CURRENT_DESKTOP", sessions[current_session].name, 1);
+    setenv("DESKTOP_SESSION", sessions[current_session].name, 1);
 
     if (chdir(pw->pw_dir) != 0) {
         chdir("/");
