@@ -19,6 +19,7 @@
 #include <termios.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <time.h>
 #include "figlet.h"
 #include "config.h"
 
@@ -856,23 +857,24 @@ static int start_session(const char *username, pam_handle_t *pamh) {
 
         char *argv[64];
         int argc = 0;
+        // Declare these outside the if block to ensure they remain in scope
+        char display_arg[16];
+        char vt_arg[16];
 
         if (strcmp(sessions[current_session].type, "x11") == 0) {
             // Build xinit command with dynamic display and vt
-            char display_arg[16];
-            char vt_arg[16];
-
+            // Use shell to execute the command - this ensures PATH is used correctly
             snprintf(display_arg, sizeof(display_arg), ":%d", vt_number - 1);
             snprintf(vt_arg, sizeof(vt_arg), "vt%d", vt_number);
 
             argv[argc++] = "xinit";
+            argv[argc++] = "/bin/sh";
+            argv[argc++] = "-c";
 
-            char *cmd_copy = strdup(sessions[current_session].exec);
-            char *token = strtok(cmd_copy, " ");
-            while (token && argc < 60) {
-                argv[argc++] = token;
-                token = strtok(NULL, " ");
-            }
+            // Build shell command: "exec <session_cmd>"
+            char *shell_cmd = malloc(512);
+            snprintf(shell_cmd, 512, "exec %s", sessions[current_session].exec);
+            argv[argc++] = shell_cmd;
 
             argv[argc++] = "--";
             argv[argc++] = display_arg;
@@ -898,9 +900,30 @@ static int start_session(const char *username, pam_handle_t *pamh) {
             close(logfd);
         }
 
+        // Log session start details
+        time_t now = time(NULL);
+        fprintf(stderr, "\n=== MDM Session Start: %s", ctime(&now));
+        fprintf(stderr, "Session: %s (%s)\n", sessions[current_session].name, sessions[current_session].type);
+        fprintf(stderr, "Command: %s\n", sessions[current_session].exec);
+        fprintf(stderr, "User: %s (UID: %d, GID: %d)\n", pw->pw_name, pw->pw_uid, pw->pw_gid);
+        fprintf(stderr, "Home: %s\n", pw->pw_dir);
+        fprintf(stderr, "Shell: %s\n", pw->pw_shell);
+        fprintf(stderr, "PATH: %s\n", getenv("PATH"));
+        fprintf(stderr, "DISPLAY: %s\n", getenv("DISPLAY"));
+        fprintf(stderr, "XDG_RUNTIME_DIR: %s\n", getenv("XDG_RUNTIME_DIR"));
+        fprintf(stderr, "Executing: ");
+        for (int i = 0; argv[i]; i++) {
+            fprintf(stderr, "%s ", argv[i]);
+        }
+        fprintf(stderr, "\n===\n\n");
+        fflush(stderr);
+
         execvp(argv[0], argv);
 
+        fprintf(stderr, "\n=== MDM Session Exec Failed ===\n");
         fprintf(stderr, "Failed to execute %s: %s\n", argv[0], strerror(errno));
+        fprintf(stderr, "errno: %d\n", errno);
+        fprintf(stderr, "===\n");
         exit(1);
     }
 
@@ -908,14 +931,32 @@ static int start_session(const char *username, pam_handle_t *pamh) {
     int status;
     waitpid(pid, &status, 0);
 
-    // Close PAM session after child exits to allow pam_systemd 
+    // Log session exit status
+    char logfile[512];
+    snprintf(logfile, sizeof(logfile), "%s/.mdm-session.log", pw->pw_dir);
+    FILE *log = fopen(logfile, "a");
+    if (log) {
+        time_t now = time(NULL);
+        fprintf(log, "\n=== MDM Session End: %s", ctime(&now));
+        if (WIFEXITED(status)) {
+            fprintf(log, "Session exited normally with code: %d\n", WEXITSTATUS(status));
+        } else if (WIFSIGNALED(status)) {
+            fprintf(log, "Session killed by signal: %d\n", WTERMSIG(status));
+        } else {
+            fprintf(log, "Session ended abnormally (status: %d)\n", status);
+        }
+        fprintf(log, "===\n\n");
+        fclose(log);
+    }
+
+    // Close PAM session after child exits to allow pam_systemd
     // to clean up /run/user/<uid> and unregister the session
     pam_close_session(pamh, 0);
 
     return 0;
 }
 
-static int authenticate(const char *username, const char *password) {
+static int authenticate(const char *username, const char *password, const char *display_name) {
     pam_handle_t *pamh = NULL;
     struct pam_conv conv = {
         pam_conversation,
@@ -932,17 +973,20 @@ static int authenticate(const char *username, const char *password) {
 
     retval = pam_authenticate(pamh, 0);
     if (retval != PAM_SUCCESS) {
-        fprintf(stderr, "Authentication failed: %s\n", pam_strerror(pamh, retval));
+        fprintf(stderr, "Authentication failed for user '%s': %s\n", username, pam_strerror(pamh, retval));
         pam_end(pamh, retval);
         return -1;
     }
 
     retval = pam_acct_mgmt(pamh, 0);
     if (retval != PAM_SUCCESS) {
-        fprintf(stderr, "Account validation failed: %s\n", pam_strerror(pamh, retval));
+        fprintf(stderr, "Account validation failed for user '%s': %s\n", username, pam_strerror(pamh, retval));
         pam_end(pamh, retval);
         return -1;
     }
+
+    // Save state BEFORE starting the session to ensure it persists even if session crashes
+    save_state(display_name);
 
     start_session(username, pamh);
 
@@ -1008,16 +1052,18 @@ int main(void) {
         char username_lower[MAX_NAME];
         to_lowercase(username_lower, username, MAX_NAME);
 
-        if (authenticate(username_lower, password) == 0) {
-            for (int i = 0; i < user_count; i++) {
-                if (strcmp(users[i].username, username_lower) == 0) {
-                    current_user = i;
-                    break;
-                }
+        // Update current_user index before authentication
+        for (int i = 0; i < user_count; i++) {
+            if (strcmp(users[i].username, username_lower) == 0) {
+                current_user = i;
+                break;
             }
-            strncpy(display_name, username, MAX_NAME - 1);
-            display_name[MAX_NAME - 1] = '\0';
-            save_state(display_name);
+        }
+
+        strncpy(display_name, username, MAX_NAME - 1);
+        display_name[MAX_NAME - 1] = '\0';
+
+        if (authenticate(username_lower, password, display_name) == 0) {
             memset(password, 0, sizeof(password));
             strncpy(username, display_name, MAX_NAME - 1);
             username[MAX_NAME - 1] = '\0';

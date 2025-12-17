@@ -31,13 +31,21 @@ clean:
 
 install: $(TARGET)
 	@echo "Installing $(TARGET)..."
-	install -Dm755 $(TARGET) $(DESTDIR)$(BINDIR)/$(TARGET)
-	install -Dm644 mdm.service $(DESTDIR)/etc/systemd/system/mdm.service
-	install -Dm644 pam.d/mdm $(DESTDIR)$(PAMDIR)/mdm
-	install -Dm644 assets/standard.flf $(DESTDIR)$(SHAREDIR)/standard.flf
-	install -Dm644 assets/small.flf $(DESTDIR)$(SHAREDIR)/small.flf
-	install -Dm644 assets/mini.flf $(DESTDIR)$(SHAREDIR)/mini.flf
-	install -Dm644 mdm.conf $(DESTDIR)$(CONFDIR)/mdm.conf
+	@echo "Creating directories..."
+	mkdir -p $(DESTDIR)$(BINDIR)
+	mkdir -p $(DESTDIR)/etc/systemd/system
+	mkdir -p $(DESTDIR)$(PAMDIR)
+	mkdir -p $(DESTDIR)$(SHAREDIR)
+	mkdir -p $(DESTDIR)$(CONFDIR)
+	mkdir -p $(DESTDIR)/var/cache/mdm
+	@echo "Installing files..."
+	install -m755 $(TARGET) $(DESTDIR)$(BINDIR)/$(TARGET)
+	install -m644 mdm.service $(DESTDIR)/etc/systemd/system/mdm.service
+	install -m644 pam.d/mdm $(DESTDIR)$(PAMDIR)/mdm
+	install -m644 assets/standard.flf $(DESTDIR)$(SHAREDIR)/standard.flf
+	install -m644 assets/small.flf $(DESTDIR)$(SHAREDIR)/small.flf
+	install -m644 assets/mini.flf $(DESTDIR)$(SHAREDIR)/mini.flf
+	install -m644 mdm.conf $(DESTDIR)$(CONFDIR)/mdm.conf
 	@echo ""
 	@echo "Installation complete! To enable:"
 	@echo "  sudo systemctl enable mdm"
