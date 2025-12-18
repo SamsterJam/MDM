@@ -928,9 +928,15 @@ static int start_session(const char *username, pam_handle_t *pamh) {
             argv[argc++] = "/bin/sh";
             argv[argc++] = "-c";
 
-            // Build shell command: "exec <session_cmd>"
-            shell_cmd = malloc(512);
-            snprintf(shell_cmd, 512, "exec %s", sessions[current_session].exec);
+            // Build shell command that sources user's X startup files before launching session
+            // This ensures .Xresources is loaded and xinitrc.d scripts run
+            shell_cmd = malloc(1024);
+            snprintf(shell_cmd, 1024,
+                "[ -f /etc/xprofile ] && . /etc/xprofile; "
+                "[ -f ~/.xprofile ] && . ~/.xprofile; "
+                "[ -f ~/.Xresources ] && xrdb -merge ~/.Xresources; "
+                "[ -d /etc/X11/xinit/xinitrc.d ] && for f in /etc/X11/xinit/xinitrc.d/?*.sh; do [ -x \"$f\" ] && . \"$f\"; done; "
+                "exec %s", sessions[current_session].exec);
             argv[argc++] = shell_cmd;
 
             argv[argc++] = "--";
