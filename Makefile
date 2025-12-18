@@ -11,7 +11,7 @@ SHAREDIR = $(PREFIX)/share/mdm
 TARGET = mdm
 SRCDIR = src
 BUILDDIR = build
-SOURCES = $(SRCDIR)/mdm.c $(SRCDIR)/figlet.c $(SRCDIR)/config.c
+SOURCES = $(SRCDIR)/mdm.c $(SRCDIR)/figlet.c $(SRCDIR)/config.c $(SRCDIR)/tui.c
 OBJECTS = $(patsubst $(SRCDIR)/%.c,$(BUILDDIR)/%.o,$(SOURCES))
 
 all: $(TARGET)

@@ -2,7 +2,7 @@
 #define CONFIG_H
 
 // Color configuration structure
-typedef struct {
+typedef struct ColorConfig {
     char background[7];
     char border[7];
     char ascii_art[7];
