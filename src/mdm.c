@@ -626,10 +626,38 @@ int main(void) {
         strncpy(display_name, username, MAX_NAME - 1);
         display_name[MAX_NAME - 1] = '\0';
 
-        if (authenticate(username_lower, password, display_name) == 0) {
+        // Fork before authenticate to keep main process clean
+        // This prevents systemd-logind from associating main mdm with any session
+        pid_t auth_pid = fork();
+        if (auth_pid < 0) {
+            perror("fork");
+            tui_show_message("System error!", config_get_ansi_color("error"));
+            sleep(2);
+            memset(password, 0, sizeof(password));
+            continue;
+        }
+
+        if (auth_pid == 0) {
+            // Child process handles authentication and session
+            int result = authenticate(username_lower, password, display_name);
+            exit(result == 0 ? 0 : 1);
+        }
+
+        // Parent: wait for auth child to complete
+        int auth_status;
+        waitpid(auth_pid, &auth_status, 0);
+
+        if (WIFEXITED(auth_status) && WEXITSTATUS(auth_status) == 0) {
+            // Session ended (user logged out) - clean up and return to login
             memset(password, 0, sizeof(password));
             strncpy(username, display_name, MAX_NAME - 1);
             username[MAX_NAME - 1] = '\0';
+
+            // Reset terminal completely after session ends
+            printf("\033c");  // Full terminal reset (ESC c)
+            fflush(stdout);
+            usleep(100000);  // 100ms to let terminal settle
+            tui_init();
             continue;
         } else {
             tui_show_message("Authentication failed!", config_get_ansi_color("error"));
