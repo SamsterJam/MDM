@@ -663,7 +663,10 @@ int main(void) {
         int auth_status;
         waitpid(auth_pid, &auth_status, 0);
 
-        if (WIFEXITED(auth_status) && WEXITSTATUS(auth_status) == 0) {
+        // Treat as successful logout if:
+        // 1. Child exited normally with code 0 (typical X session logout)
+        // 2. Child was terminated by signal (typical Wayland session cleanup by systemd-logind)
+        if ((WIFEXITED(auth_status) && WEXITSTATUS(auth_status) == 0) || WIFSIGNALED(auth_status)) {
             // Session ended (user logged out) - clean up and return to login
             memset(password, 0, sizeof(password));
             strncpy(username, display_name, MAX_NAME - 1);
@@ -676,6 +679,7 @@ int main(void) {
             tui_init();
             continue;
         } else {
+            // Only show auth failed if child actually exited with error code (not signal)
             tui_show_message("Authentication failed!", config_get_ansi_color("error"));
             sleep(2);
             memset(password, 0, sizeof(password));
