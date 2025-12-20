@@ -19,13 +19,22 @@
 #define FONT_FILE_SMALL "/usr/local/share/mdm/small.flf"
 #define FONT_FILE_MINI "/usr/local/share/mdm/mini.flf"
 
+/* Box layout constants */
+#define BOX_WIDTH 70
+#define BOX_HEIGHT 13
+#define BOX_PADDING 3
+#define TITLE_OFFSET 6
+#define INPUT_OFFSET 10
+#define SESSION_OFFSET 4
+
 /* Terminal dimensions - managed by TUI module */
 static int term_rows = 24;
 static int term_cols = 80;
 
 static void get_term_size(void) {
     struct winsize ws;
-    int retries = 10;
+    static int first_call = 1;
+    int retries = first_call ? 10 : 1;  // Only retry on first call
 
     // Retry getting terminal size with small delays
     // This handles the case where TTY isn't fully initialized on first boot
@@ -35,24 +44,31 @@ static void get_term_size(void) {
             if (ws.ws_row > 10 && ws.ws_col > 40 && ws.ws_row < 512 && ws.ws_col < 512) {
                 term_rows = ws.ws_row;
                 term_cols = ws.ws_col;
+                first_call = 0;
                 return;
             }
         }
 
-        // Small delay before retry (10ms)
-        usleep(10000);
+        // Small delay before retry (10ms) - only on first call
+        if (first_call) {
+            usleep(10000);
+        }
         retries--;
     }
 
-    // Fallback to environment variables if ioctl keeps failing
-    char *lines = getenv("LINES");
-    char *cols = getenv("COLUMNS");
-    if (lines) term_rows = atoi(lines);
-    if (cols) term_cols = atoi(cols);
+    // Fallback to environment variables if ioctl keeps failing (first call only)
+    if (first_call) {
+        char *lines = getenv("LINES");
+        char *cols = getenv("COLUMNS");
+        if (lines) term_rows = atoi(lines);
+        if (cols) term_cols = atoi(cols);
 
-    // Final fallback to standard VT100 dimensions
-    if (term_rows == 0) term_rows = 24;
-    if (term_cols == 0) term_cols = 80;
+        // Final fallback to standard VT100 dimensions
+        if (term_rows == 0) term_rows = 24;
+        if (term_cols == 0) term_cols = 80;
+    }
+
+    first_call = 0;
 }
 
 static void draw_repeat(const char *str, int count) {
@@ -93,53 +109,86 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
     int max_width;
     int use_plain_text = 0;
 
+    // Cache the last successful font choice based on username length
+    static int cached_len = 0;
+    static const char *cached_font = NULL;
+    int username_len = strlen(username);
+
     // Initialize line pointers
     for (int i = 0; i < 32; i++) {
         lines[i] = line_buffers[i];
         line_buffers[i][0] = '\0';
     }
 
-    // Try rendering with standard font first (already loaded)
+    // If username length changed significantly, try cached font first
+    if (cached_font != NULL && abs(username_len - cached_len) <= 2) {
+        if (strcmp(cached_font, FONT_FILE) != 0) {
+            figlet_init(cached_font);
+        }
+        line_count = figlet_render(username, lines, 32);
+        if (line_count > 0) {
+            max_width = get_max_line_width(lines, line_count);
+            if (max_width < box_width) {
+                goto render_success;  // Cache hit, use this font
+            }
+        }
+        // Cache miss, fall through to try all fonts
+        figlet_init(FONT_FILE);  // Reset to standard
+    }
+
+    // Try rendering with standard font
     line_count = figlet_render(username, lines, 32);
 
     if (line_count > 0) {
         max_width = get_max_line_width(lines, line_count);
 
+        if (max_width < box_width) {
+            cached_font = FONT_FILE;
+            cached_len = username_len;
+            goto render_success;
+        }
+
         // If too wide, try small font
-        if (max_width >= box_width) {
-            if (figlet_init(FONT_FILE_SMALL) == 0) {
-                // Clear buffers
-                for (int i = 0; i < 32; i++) {
-                    line_buffers[i][0] = '\0';
-                }
-                line_count = figlet_render(username, lines, 32);
-                if (line_count > 0) {
-                    max_width = get_max_line_width(lines, line_count);
+        if (figlet_init(FONT_FILE_SMALL) == 0) {
+            for (int i = 0; i < 32; i++) {
+                line_buffers[i][0] = '\0';
+            }
+            line_count = figlet_render(username, lines, 32);
+            if (line_count > 0) {
+                max_width = get_max_line_width(lines, line_count);
+                if (max_width < box_width) {
+                    cached_font = FONT_FILE_SMALL;
+                    cached_len = username_len;
+                    goto render_success;
                 }
             }
         }
 
         // If still too wide, try mini font
-        if (max_width >= box_width) {
-            if (figlet_init(FONT_FILE_MINI) == 0) {
-                // Clear buffers
-                for (int i = 0; i < 32; i++) {
-                    line_buffers[i][0] = '\0';
-                }
-                line_count = figlet_render(username, lines, 32);
-                if (line_count > 0) {
-                    max_width = get_max_line_width(lines, line_count);
+        if (figlet_init(FONT_FILE_MINI) == 0) {
+            for (int i = 0; i < 32; i++) {
+                line_buffers[i][0] = '\0';
+            }
+            line_count = figlet_render(username, lines, 32);
+            if (line_count > 0) {
+                max_width = get_max_line_width(lines, line_count);
+                if (max_width < box_width) {
+                    cached_font = FONT_FILE_MINI;
+                    cached_len = username_len;
+                    goto render_success;
                 }
             }
         }
 
         // If still too wide, fall back to plain text
-        if (max_width >= box_width) {
-            use_plain_text = 1;
-        }
+        use_plain_text = 1;
+        cached_font = NULL;  // Clear cache for plain text
     } else {
         use_plain_text = 1;
+        cached_font = NULL;
     }
+
+render_success:
 
     const char *color_start = highlighted ?
         config_get_ansi_color("ascii_highlight") :
@@ -161,8 +210,11 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
         }
     }
 
-    // Reload standard font for next call
-    figlet_init(FONT_FILE);
+    // Only reload standard font if we're not using it (for consistency)
+    // The cache will handle font selection on next call
+    if (!use_plain_text && cached_font != NULL && strcmp(cached_font, FONT_FILE) != 0) {
+        figlet_init(cached_font);  // Keep the cached font loaded
+    }
 }
 
 static void draw_session_selector(int row, int col, Session *sessions, int current_session, int is_active) {
@@ -227,6 +279,20 @@ static void draw_power_hotkeys(ColorConfig *colors) {
     fflush(stdout);
 }
 
+static void redraw_login_screen(int start_row, int start_col, int input_row, int input_col, int input_width,
+                                int pass_row, int pass_col, int pass_pos, int session_row, int center_col,
+                                const char *username, int username_highlighted,
+                                Session *sessions, int current_session, int session_active,
+                                ColorConfig *colors) {
+    printf("\033[2J\033[H\033[?25l");
+    draw_box(start_row, start_col, BOX_WIDTH, BOX_HEIGHT);
+    draw_title(start_row, start_col, BOX_WIDTH, username, username_highlighted);
+    draw_box(input_row, input_col, input_width, 1);
+    draw_password(pass_row, pass_col, pass_pos);
+    draw_session_selector(session_row, center_col, sessions, current_session, session_active);
+    draw_power_hotkeys(colors);
+}
+
 static int get_function_key_num(const char *hotkey) {
     if (!hotkey || (hotkey[0] != 'F' && hotkey[0] != 'f'))
         return 0;
@@ -266,7 +332,7 @@ static int handle_power_action(struct termios *old, const char *action, const ch
 static int handle_input(char *username, char *password, int max_len, int *pass_pos, int *user_pos,
                        int *active_field, int *user_edit_mode, int user_row, int pass_row,
                        int pass_col, int session_row, int center_col,
-                       int start_row, int start_col, int box_width,
+                       int start_row, int start_col, int input_col, int input_width,
                        Session *sessions, int session_count, int *current_session, ColorConfig *colors) {
     struct termios old, new;
     char original_username[MAX_NAME];
@@ -300,32 +366,20 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
         if (c == '\t') {
             if (*active_field == 0 && *user_edit_mode) {
                 *user_edit_mode = 0;
-                printf("\033[2J\033[H\033[?25l");
-                draw_box(start_row, start_col, box_width, 13);
-                draw_title(start_row, start_col, box_width, username, 0);
-                draw_box(pass_row - 1, start_col + 3, box_width - 6, 1);
-                draw_password(pass_row, pass_col, *pass_pos);
-                draw_session_selector(session_row, center_col, sessions, *current_session, 0);
-                draw_power_hotkeys(colors);
+                redraw_login_screen(start_row, start_col, pass_row - 1, input_col, input_width,
+                                  pass_row, pass_col, *pass_pos, session_row, center_col,
+                                  username, 0, sessions, *current_session, 0, colors);
             }
             int old_field = *active_field;
             *active_field = (*active_field + 1) % 3;
             if (old_field == 0 && !*user_edit_mode) {
-                printf("\033[2J\033[H\033[?25l");
-                draw_box(start_row, start_col, box_width, 13);
-                draw_title(start_row, start_col, box_width, username, 0);
-                draw_box(pass_row - 1, start_col + 3, box_width - 6, 1);
-                draw_password(pass_row, pass_col, *pass_pos);
-                draw_session_selector(session_row, center_col, sessions, *current_session, 0);
-                draw_power_hotkeys(colors);
+                redraw_login_screen(start_row, start_col, pass_row - 1, input_col, input_width,
+                                  pass_row, pass_col, *pass_pos, session_row, center_col,
+                                  username, 0, sessions, *current_session, 0, colors);
             } else if (*active_field == 0 && !*user_edit_mode) {
-                printf("\033[2J\033[H\033[?25l");
-                draw_box(start_row, start_col, box_width, 13);
-                draw_title(start_row, start_col, box_width, username, 1);
-                draw_box(pass_row - 1, start_col + 3, box_width - 6, 1);
-                draw_password(pass_row, pass_col, *pass_pos);
-                draw_session_selector(session_row, center_col, sessions, *current_session, 0);
-                draw_power_hotkeys(colors);
+                redraw_login_screen(start_row, start_col, pass_row - 1, input_col, input_width,
+                                  pass_row, pass_col, *pass_pos, session_row, center_col,
+                                  username, 1, sessions, *current_session, 0, colors);
             }
             draw_session_selector(session_row, center_col, sessions, *current_session, *active_field == 2);
             fflush(stdout);
@@ -393,13 +447,9 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                         snprintf(original_username, MAX_NAME, "%s", username);
                     }
                     *user_edit_mode = 0;
-                    printf("\033[2J\033[H\033[?25l");
-                    draw_box(start_row, start_col, box_width, 13);
-                    draw_title(start_row, start_col, box_width, username, 1);
-                    draw_box(pass_row - 1, start_col + 3, box_width - 6, 1);
-                    draw_password(pass_row, pass_col, *pass_pos);
-                    draw_session_selector(session_row, center_col, sessions, *current_session, 0);
-                    draw_power_hotkeys(colors);
+                    redraw_login_screen(start_row, start_col, pass_row - 1, input_col, input_width,
+                                      pass_row, pass_col, *pass_pos, session_row, center_col,
+                                      username, 1, sessions, *current_session, 0, colors);
                     fflush(stdout);
                 } else if (c == 127 || c == 8) {
                     if (*user_pos > 0) {
@@ -499,32 +549,30 @@ int tui_display_login(
     (void)user_count;  // Unused for now
     (void)current_user; // Unused for now
 
-    int box_width = 70;
-    int box_height = 13;
-    int start_col = (term_cols - box_width - 2) / 2;
-    int start_row = (term_rows - box_height - 2) / 2;
+    int start_col = (term_cols - BOX_WIDTH - 2) / 2;
+    int start_row = (term_rows - BOX_HEIGHT - 2) / 2;
 
     if (start_col < 1) start_col = 1;
     if (start_row < 1) start_row = 1;
 
     printf("\033[2J\033[H\033[?25l");
 
-    draw_box(start_row, start_col, box_width, box_height);
-    draw_title(start_row, start_col, box_width, username, 0);
+    draw_box(start_row, start_col, BOX_WIDTH, BOX_HEIGHT);
+    draw_title(start_row, start_col, BOX_WIDTH, username, 0);
 
-    int user_row = start_row + 6;
-    int center_col = start_col + box_width / 2 + 1;
+    int user_row = start_row + TITLE_OFFSET;
+    int center_col = start_col + BOX_WIDTH / 2 + 1;
 
-    int input_row = start_row + 10;
-    int input_col = start_col + 3;
-    int input_width = box_width - 6;
+    int input_row = start_row + INPUT_OFFSET;
+    int input_col = start_col + BOX_PADDING;
+    int input_width = BOX_WIDTH - (BOX_PADDING * 2);
 
     draw_box(input_row, input_col, input_width, 1);
 
     int field_row = input_row + 1;
     int field_col = input_col + 2;
 
-    int session_row = input_row + 4;
+    int session_row = input_row + SESSION_OFFSET;
 
     draw_session_selector(session_row, center_col, sessions, *current_session, 0);
     draw_power_hotkeys(colors);
@@ -536,7 +584,7 @@ int tui_display_login(
 
     int result = handle_input(username, password, MAX_PASSWORD, &pass_pos, &user_pos, &active_field,
                     &user_edit_mode, user_row, field_row, field_col, session_row, center_col,
-                    start_row, start_col, box_width, sessions, session_count, current_session, colors);
+                    start_row, start_col, input_col, input_width, sessions, session_count, current_session, colors);
 
     if (result < 0)
         return result;

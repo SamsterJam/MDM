@@ -236,7 +236,7 @@ static void load_state(char *display_name) {
 }
 
 static void save_state(const char *display_name) {
-    mkdir("/var/cache/mdm", 0755);
+    mkdir("/var/cache/mdm", 0700);
 
     FILE *f = fopen(STATE_FILE, "w");
     if (!f) return;
@@ -483,7 +483,7 @@ static int start_session(const char *username, pam_handle_t *pamh) {
 
         execvp(argv[0], argv);
 
-        // If execvp returns, it failed - cleanup before exit
+        // execvp only returns on failure - cleanup allocated memory
         if (shell_cmd) free(shell_cmd);
         if (cmd_copy) free(cmd_copy);
 
@@ -587,6 +587,22 @@ int main(void) {
     detect_users();
     detect_sessions();
     load_state(display_name);
+
+    // Validate display_name corresponds to an actual user
+    if (display_name[0] != '\0') {
+        char display_lower[MAX_NAME];
+        to_lowercase(display_lower, display_name, MAX_NAME);
+        int valid = 0;
+        for (int i = 0; i < user_count; i++) {
+            if (strcmp(users[i].username, display_lower) == 0) {
+                valid = 1;
+                break;
+            }
+        }
+        if (!valid) {
+            display_name[0] = '\0';  // Clear invalid display name
+        }
+    }
 
     if (display_name[0] != '\0') {
         strncpy(username, display_name, MAX_NAME - 1);
