@@ -2,6 +2,7 @@
 #include <string.h>
 #include <ctype.h>
 #include "config.h"
+#include "log.h"
 
 static void config_set_defaults(ColorConfig *config) {
     memcpy(config->background, "282c34\0", 7);
@@ -100,7 +101,7 @@ int config_load(const char *config_path, ColorConfig *config) {
         } else {
             // Color settings need hex validation
             if (!is_valid_hex(value)) {
-                fprintf(stderr, "Warning: Invalid hex color '%s' for '%s'\n", value, key);
+                log_warnf("Invalid hex color '%s' for '%s'", value, key);
                 continue;
             }
 

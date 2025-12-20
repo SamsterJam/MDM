@@ -16,6 +16,7 @@
 #include <string.h>
 #include <ctype.h>
 #include "figlet.h"
+#include "log.h"
 
 #define MAXLEN 255
 
@@ -56,7 +57,7 @@ static int outlinelenlimit = 512;
 static void *myalloc(size_t size) {
     void *ptr = malloc(size);
     if (!ptr) {
-        fprintf(stderr, "figlet: Out of memory\n");
+        log_critical("figlet: Out of memory");
         exit(1);
     }
     return ptr;

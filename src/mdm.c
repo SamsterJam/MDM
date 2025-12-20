@@ -1,6 +1,7 @@
 /*
  * MDM - Minimal Display Manager
- * A lightweight terminal-based display manager with zero external dependencies
+ * A lightweight terminal-based display manager
+ * Dependencies: PAM, systemd (for journal logging)
  */
 
 #include <stdio.h>
@@ -24,6 +25,7 @@
 #include "figlet.h"
 #include "config.h"
 #include "tui.h"
+#include "log.h"
 
 #define MAX_PASSWORD 256
 #define MAX_USERS 64
@@ -123,8 +125,8 @@ static void detect_users(void) {
     endpwent();
 
     if (user_count == 0) {
-        fprintf(stderr, "No valid users found (need UID >= %d and < 60000 with valid shell)\n", MIN_UID);
-        fprintf(stderr, "Debug: getent passwd | awk -F: '$3 >= %d && $3 < 60000 {print $1, $3, $7}'\n", MIN_UID);
+        log_criticalf("No valid users found (need UID >= %d and < 60000 with valid shell)", MIN_UID);
+        log_debugf("Debug: getent passwd | awk -F: '$3 >= %d && $3 < 60000 {print $1, $3, $7}'", MIN_UID);
         exit(1);
     }
 }
@@ -328,17 +330,17 @@ static void setup_user_environment(struct passwd *pw, const char *session_type, 
 
 static int init_groups(struct passwd *pw) {
     if (initgroups(pw->pw_name, pw->pw_gid) != 0) {
-        perror("initgroups");
+        log_errorf("initgroups failed for user %s: %s", pw->pw_name, strerror(errno));
         return -1;
     }
 
     if (setgid(pw->pw_gid) != 0) {
-        perror("setgid");
+        log_errorf("setgid failed for GID %d: %s", pw->pw_gid, strerror(errno));
         return -1;
     }
 
     if (setuid(pw->pw_uid) != 0) {
-        perror("setuid");
+        log_errorf("setuid failed for UID %d: %s", pw->pw_uid, strerror(errno));
         return -1;
     }
 
@@ -348,7 +350,7 @@ static int init_groups(struct passwd *pw) {
 static int start_session(const char *username, pam_handle_t *pamh) {
     struct passwd *pw = getpwnam(username);
     if (!pw) {
-        fprintf(stderr, "User %s not found\n", username);
+        log_errorf("User %s not found", username);
         return -1;
     }
 
@@ -371,19 +373,27 @@ static int start_session(const char *username, pam_handle_t *pamh) {
 
     // Open PAM session before forking to allow pam_systemd to create /run/user/<uid> and register the session
     if (pam_open_session(pamh, 0) != PAM_SUCCESS) {
-        fprintf(stderr, "Failed to open PAM session\n");
+        log_error("Failed to open PAM session");
         return -1;
     }
 
     pid_t pid = fork();
 
     if (pid < 0) {
-        perror("fork");
+        log_errorf("fork failed: %s", strerror(errno));
         pam_close_session(pamh, 0);
         return -1;
     }
 
     if (pid == 0) {
+        // Redirect stdout and stderr to /dev/null to prevent session output (X, Wayland, etc.) from cluttering TTY
+        int devnull_child = open("/dev/null", O_WRONLY);
+        if (devnull_child >= 0) {
+            dup2(devnull_child, STDOUT_FILENO);
+            dup2(devnull_child, STDERR_FILENO);
+            close(devnull_child);
+        }
+
         setup_user_environment(pw, sessions[current_session].type, vt_number);
 
         // Import environment variables set by pam_systemd
@@ -454,32 +464,13 @@ static int start_session(const char *username, pam_handle_t *pamh) {
             argv[argc] = NULL;
         }
 
-        char logfile[512];
-        snprintf(logfile, sizeof(logfile), "%s/.mdm-session.log", pw->pw_dir);
-        int logfd = open(logfile, O_WRONLY | O_CREAT | O_APPEND, 0600);
-        if (logfd >= 0) {
-            dup2(logfd, STDOUT_FILENO);
-            dup2(logfd, STDERR_FILENO);
-            close(logfd);
-        }
-
-        // Log session start details
-        time_t now = time(NULL);
-        fprintf(stderr, "\n=== MDM Session Start: %s", ctime(&now));
-        fprintf(stderr, "Session: %s (%s)\n", sessions[current_session].name, sessions[current_session].type);
-        fprintf(stderr, "Command: %s\n", sessions[current_session].exec);
-        fprintf(stderr, "User: %s (UID: %d, GID: %d)\n", pw->pw_name, pw->pw_uid, pw->pw_gid);
-        fprintf(stderr, "Home: %s\n", pw->pw_dir);
-        fprintf(stderr, "Shell: %s\n", pw->pw_shell);
-        fprintf(stderr, "PATH: %s\n", getenv("PATH"));
-        fprintf(stderr, "DISPLAY: %s\n", getenv("DISPLAY"));
-        fprintf(stderr, "XDG_RUNTIME_DIR: %s\n", getenv("XDG_RUNTIME_DIR"));
-        fprintf(stderr, "Executing: ");
-        for (int i = 0; argv[i]; i++) {
-            fprintf(stderr, "%s ", argv[i]);
-        }
-        fprintf(stderr, "\n===\n\n");
-        fflush(stderr);
+        // Log session start details to journal
+        log_infof("Session starting for user %s (UID: %d, GID: %d)", pw->pw_name, pw->pw_uid, pw->pw_gid);
+        log_infof("Session type: %s (%s)", sessions[current_session].name, sessions[current_session].type);
+        log_debugf("Command: %s", sessions[current_session].exec);
+        log_debugf("Home: %s, Shell: %s", pw->pw_dir, pw->pw_shell);
+        log_debugf("PATH: %s", getenv("PATH"));
+        log_debugf("DISPLAY: %s, XDG_RUNTIME_DIR: %s", getenv("DISPLAY"), getenv("XDG_RUNTIME_DIR"));
 
         execvp(argv[0], argv);
 
@@ -487,10 +478,7 @@ static int start_session(const char *username, pam_handle_t *pamh) {
         if (shell_cmd) free(shell_cmd);
         if (cmd_copy) free(cmd_copy);
 
-        fprintf(stderr, "\n=== MDM Session Exec Failed ===\n");
-        fprintf(stderr, "Failed to execute %s: %s\n", argv[0], strerror(errno));
-        fprintf(stderr, "errno: %d\n", errno);
-        fprintf(stderr, "===\n");
+        log_criticalf("Failed to execute %s: %s (errno: %d)", argv[0], strerror(errno), errno);
         exit(1);
     }
 
@@ -498,22 +486,13 @@ static int start_session(const char *username, pam_handle_t *pamh) {
     int status;
     waitpid(pid, &status, 0);
 
-    // Log session exit status
-    char logfile[512];
-    snprintf(logfile, sizeof(logfile), "%s/.mdm-session.log", pw->pw_dir);
-    FILE *log = fopen(logfile, "a");
-    if (log) {
-        time_t now = time(NULL);
-        fprintf(log, "\n=== MDM Session End: %s", ctime(&now));
-        if (WIFEXITED(status)) {
-            fprintf(log, "Session exited normally with code: %d\n", WEXITSTATUS(status));
-        } else if (WIFSIGNALED(status)) {
-            fprintf(log, "Session killed by signal: %d\n", WTERMSIG(status));
-        } else {
-            fprintf(log, "Session ended abnormally (status: %d)\n", status);
-        }
-        fprintf(log, "===\n\n");
-        fclose(log);
+    // Log session exit status to journal
+    if (WIFEXITED(status)) {
+        log_infof("Session ended for user %s, exit code: %d", username, WEXITSTATUS(status));
+    } else if (WIFSIGNALED(status)) {
+        log_warnf("Session for user %s killed by signal: %d", username, WTERMSIG(status));
+    } else {
+        log_warnf("Session for user %s ended abnormally (status: %d)", username, status);
     }
 
     // Close PAM session after child exits to allow pam_systemd
@@ -534,20 +513,20 @@ static int authenticate(const char *username, const char *password, const char *
 
     retval = pam_start("mdm", username, &conv, &pamh);
     if (retval != PAM_SUCCESS) {
-        fprintf(stderr, "pam_start failed (error code %d)\n", retval);
+        log_errorf("pam_start failed (error code %d)", retval);
         return -1;
     }
 
     retval = pam_authenticate(pamh, 0);
     if (retval != PAM_SUCCESS) {
-        fprintf(stderr, "Authentication failed for user '%s': %s\n", username, pam_strerror(pamh, retval));
+        log_warnf("Authentication failed for user '%s': %s", username, pam_strerror(pamh, retval));
         pam_end(pamh, retval);
         return -1;
     }
 
     retval = pam_acct_mgmt(pamh, 0);
     if (retval != PAM_SUCCESS) {
-        fprintf(stderr, "Account validation failed for user '%s': %s\n", username, pam_strerror(pamh, retval));
+        log_errorf("Account validation failed for user '%s': %s", username, pam_strerror(pamh, retval));
         pam_end(pamh, retval);
         return -1;
     }
@@ -568,9 +547,11 @@ int main(void) {
     char display_name[MAX_NAME] = {0};
 
     if (getuid() != 0) {
-        fprintf(stderr, "mdm must be run as root\n");
+        log_critical("mdm must be run as root");
         return 1;
     }
+
+    log_info("MDM starting");
 
     // Load color configuration
     config_load(CONFIG_FILE, &colors);
@@ -580,10 +561,19 @@ int main(void) {
 
     // Initialize FIGlet font
     if (figlet_init(FONT_FILE) != 0) {
-        fprintf(stderr, "Warning: Could not load font file %s\n", FONT_FILE);
+        log_warnf("Could not load font file %s", FONT_FILE);
     }
 
     tui_init();
+
+    // Redirect stderr to /dev/null to prevent journal fallback from cluttering the TUI
+    // Journal logging still works via sd_journal_send(), but stderr output is suppressed
+    int devnull = open("/dev/null", O_WRONLY);
+    if (devnull >= 0) {
+        dup2(devnull, STDERR_FILENO);
+        close(devnull);
+    }
+
     detect_users();
     detect_sessions();
     load_state(display_name);
@@ -646,7 +636,7 @@ int main(void) {
         // This prevents systemd-logind from associating main mdm with any session
         pid_t auth_pid = fork();
         if (auth_pid < 0) {
-            perror("fork");
+            log_errorf("fork failed: %s", strerror(errno));
             tui_show_message("System error!", config_get_ansi_color("error"));
             sleep(2);
             memset(password, 0, sizeof(password));

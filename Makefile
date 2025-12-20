@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -O2
-LDFLAGS = -lpam
+LDFLAGS = -lpam -lsystemd
 
 PREFIX = /usr/local
 BINDIR = $(PREFIX)/bin
