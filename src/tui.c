@@ -120,8 +120,9 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
         line_buffers[i][0] = '\0';
     }
 
-    // If username length changed significantly, try cached font first
-    if (cached_font != NULL && abs(username_len - cached_len) <= 2) {
+    // Only use cached font if username is same length or longer
+    // (if shorter, we should try bigger fonts first)
+    if (cached_font != NULL && username_len >= cached_len) {
         if (strcmp(cached_font, FONT_FILE) != 0) {
             figlet_init(cached_font);
         }
@@ -134,6 +135,9 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
         }
         // Cache miss, fall through to try all fonts
         figlet_init(FONT_FILE);  // Reset to standard
+    } else {
+        // No cache or username got shorter, reset to standard font
+        figlet_init(FONT_FILE);
     }
 
     // Try rendering with standard font
