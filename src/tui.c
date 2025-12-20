@@ -15,9 +15,9 @@
 #include "config.h"
 
 #define MAX_PASSWORD 256
-#define FONT_FILE "/usr/local/share/mdm/standard.flf"
-#define FONT_FILE_SMALL "/usr/local/share/mdm/small.flf"
-#define FONT_FILE_MINI "/usr/local/share/mdm/mini.flf"
+#define FONT_FILE "/usr/share/mdm/standard.flf"
+#define FONT_FILE_SMALL "/usr/share/mdm/small.flf"
+#define FONT_FILE_MINI "/usr/share/mdm/mini.flf"
 
 /* Box layout constants */
 #define BOX_WIDTH 70

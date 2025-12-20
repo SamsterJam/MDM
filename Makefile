@@ -2,7 +2,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -O2
 LDFLAGS = -lpam -lsystemd
 
-PREFIX = /usr/local
+PREFIX = /usr
 BINDIR = $(PREFIX)/bin
 CONFDIR = /etc/mdm
 PAMDIR = /etc/pam.d
@@ -33,14 +33,14 @@ install: $(TARGET)
 	@echo "Installing $(TARGET)..."
 	@echo "Creating directories..."
 	mkdir -p $(DESTDIR)$(BINDIR)
-	mkdir -p $(DESTDIR)/etc/systemd/system
+	mkdir -p $(DESTDIR)/usr/lib/systemd/system
 	mkdir -p $(DESTDIR)$(PAMDIR)
 	mkdir -p $(DESTDIR)$(SHAREDIR)
 	mkdir -p $(DESTDIR)$(CONFDIR)
 	mkdir -p $(DESTDIR)/var/cache/mdm
 	@echo "Installing files..."
 	install -m755 $(TARGET) $(DESTDIR)$(BINDIR)/$(TARGET)
-	install -m644 mdm.service $(DESTDIR)/etc/systemd/system/mdm.service
+	install -m644 mdm.service $(DESTDIR)/usr/lib/systemd/system/mdm.service
 	install -m644 pam.d/mdm $(DESTDIR)$(PAMDIR)/mdm
 	install -m644 assets/standard.flf $(DESTDIR)$(SHAREDIR)/standard.flf
 	install -m644 assets/small.flf $(DESTDIR)$(SHAREDIR)/small.flf
@@ -55,11 +55,11 @@ install: $(TARGET)
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/$(TARGET)
-	rm -f $(DESTDIR)/etc/systemd/system/mdm.service
+	rm -f $(DESTDIR)/usr/lib/systemd/system/mdm.service
 	rm -f $(DESTDIR)$(PAMDIR)/mdm
 	rm -f $(DESTDIR)$(SHAREDIR)/standard.flf
 	rm -f $(DESTDIR)$(SHAREDIR)/small.flf
 	rm -f $(DESTDIR)$(SHAREDIR)/mini.flf
-	@echo "Note: $(CONFDIR)/mdm.conf left intact for safety"
+	@echo "Note: $(CONFDIR)/mdm.conf and /var/cache/mdm left intact for safety"
 
 .PHONY: all clean install uninstall

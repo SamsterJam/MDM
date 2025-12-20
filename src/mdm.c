@@ -33,9 +33,9 @@
 #define CONFIG_FILE "/etc/mdm/mdm.conf"
 #define STATE_FILE "/var/cache/mdm/state"
 #define MIN_UID 1000
-#define FONT_FILE "/usr/local/share/mdm/standard.flf"
-#define FONT_FILE_SMALL "/usr/local/share/mdm/small.flf"
-#define FONT_FILE_MINI "/usr/local/share/mdm/mini.flf"
+#define FONT_FILE "/usr/share/mdm/standard.flf"
+#define FONT_FILE_SMALL "/usr/share/mdm/small.flf"
+#define FONT_FILE_MINI "/usr/share/mdm/mini.flf"
 
 static User users[MAX_USERS];
 static int user_count = 0;
@@ -300,7 +300,7 @@ static void setup_user_environment(struct passwd *pw, const char *session_type, 
     setenv("SHELL", pw->pw_shell, 1);
     setenv("USER", pw->pw_name, 1);
     setenv("LOGNAME", pw->pw_name, 1);
-    setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/bin", 1);
+    setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin", 1);
     setenv("PWD", pw->pw_dir, 1);
 
     snprintf(display, sizeof(display), ":%d", vt_number - 1);

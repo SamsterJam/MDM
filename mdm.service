@@ -7,7 +7,7 @@ After=getty@tty1.service
 
 [Service]
 Type=idle
-ExecStart=/usr/local/bin/mdm
+ExecStart=/usr/bin/mdm
 Restart=always
 StandardInput=tty
 StandardOutput=tty
