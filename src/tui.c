@@ -10,6 +10,7 @@
 #include <termios.h>
 #include <sys/ioctl.h>
 #include <signal.h>
+#include <errno.h>
 #include "types.h"
 #include "tui.h"
 #include "figlet.h"
@@ -348,6 +349,12 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
         fflush(stdout);
 
         int c = getchar();
+
+        // Handle interrupted getchar() (SIGWINCH during input)
+        if (c == EOF && errno == EINTR) {
+            clearerr(stdin);
+            continue;  // Loop will check term_resized flag
+        }
 
         if (c == 3) {
             tcsetattr(STDIN_FILENO, TCSANOW, &old);

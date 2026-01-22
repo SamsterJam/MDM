@@ -560,7 +560,12 @@ int main(void) {
     log_info("MDM starting");
 
     // Set up SIGWINCH handler before TUI init
-    signal(SIGWINCH, handle_sigwinch);
+    // Use sigaction to ensure system calls are interrupted (not restarted)
+    struct sigaction sa;
+    sa.sa_handler = handle_sigwinch;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;  // No SA_RESTART - allow interruption of syscalls
+    sigaction(SIGWINCH, &sa, NULL);
 
     // Load color configuration
     config_load(CONFIG_FILE, &colors);
