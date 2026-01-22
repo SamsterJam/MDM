@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <pwd.h>
 #include <grp.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
@@ -541,6 +542,11 @@ static int authenticate(const char *username, const char *password, const char *
     return 0;
 }
 
+static void handle_sigwinch(int sig) {
+    (void)sig;
+    tui_update_size();
+}
+
 int main(void) {
     char password[MAX_PASSWORD];
     char username[MAX_NAME];
@@ -552,6 +558,9 @@ int main(void) {
     }
 
     log_info("MDM starting");
+
+    // Set up SIGWINCH handler before TUI init
+    signal(SIGWINCH, handle_sigwinch);
 
     // Load color configuration
     config_load(CONFIG_FILE, &colors);
@@ -565,6 +574,9 @@ int main(void) {
     }
 
     tui_init();
+
+    // Brief pause to allow SIGWINCH to fire if TTY is still initializing
+    usleep(50000);  // 50ms
 
     // Redirect stderr to /dev/null to prevent journal fallback from cluttering the TUI
     // Journal logging still works via sd_journal_send(), but stderr output is suppressed

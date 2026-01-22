@@ -17,6 +17,11 @@
 void tui_init(void);
 
 /*
+ * Update terminal size (called by SIGWINCH handler)
+ */
+void tui_update_size(void);
+
+/*
  * Display the login screen and handle user input
  *
  * Parameters:

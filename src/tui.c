@@ -34,62 +34,17 @@ static int term_cols = 80;
 
 static void get_term_size(void) {
     struct winsize ws;
-    static int first_call = 1;
-    int retries = first_call ? 10 : 1;  // Only retry on first call
-    int attempt = 0;
 
-    log_debugf("get_term_size() called (first_call=%d, retries=%d)", first_call, retries);
-
-    // Retry getting terminal size with small delays
-    // This handles the case where TTY isn't fully initialized on first boot
-    while (retries > 0) {
-        attempt++;
-        int result = ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws);
-        log_debugf("ioctl attempt %d: result=%d, ws_row=%d, ws_col=%d",
-                   attempt, result, ws.ws_row, ws.ws_col);
-
-        if (result == 0) {
-            // Check if we got valid dimensions (not 0x0, too small, or unreasonably large)
-            if (ws.ws_row > 10 && ws.ws_col > 40 && ws.ws_row < 512 && ws.ws_col < 512) {
-                term_rows = ws.ws_row;
-                term_cols = ws.ws_col;
-                log_infof("Terminal size detected: %dx%d", term_rows, term_cols);
-                first_call = 0;
-                return;
-            } else {
-                log_warnf("ioctl returned invalid dimensions: %dx%d", ws.ws_row, ws.ws_col);
-            }
-        } else {
-            log_warnf("ioctl failed on attempt %d", attempt);
-        }
-
-        // Small delay before retry (10ms) - only on first call
-        if (first_call) {
-            usleep(10000);
-        }
-        retries--;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0 && ws.ws_col > 0) {
+        term_rows = ws.ws_row;
+        term_cols = ws.ws_col;
+        log_infof("Terminal size: %dx%d", term_rows, term_cols);
+    } else {
+        // Fallback to defaults
+        term_rows = 24;
+        term_cols = 80;
+        log_warnf("Using default terminal size: %dx%d", term_rows, term_cols);
     }
-
-    log_warn("All ioctl attempts failed, falling back to environment variables");
-
-    // Fallback to environment variables if ioctl keeps failing (first call only)
-    if (first_call) {
-        char *lines = getenv("LINES");
-        char *cols = getenv("COLUMNS");
-        log_debugf("Environment variables: LINES=%s, COLUMNS=%s",
-                   lines ? lines : "NULL", cols ? cols : "NULL");
-
-        if (lines) term_rows = atoi(lines);
-        if (cols) term_cols = atoi(cols);
-
-        // Final fallback to standard VT100 dimensions
-        if (term_rows == 0) term_rows = 24;
-        if (term_cols == 0) term_cols = 80;
-
-        log_warnf("Using fallback terminal size: %dx%d", term_rows, term_cols);
-    }
-
-    first_call = 0;
 }
 
 static void draw_repeat(const char *str, int count) {
@@ -537,9 +492,11 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
 /* Public API implementations */
 
 void tui_init(void) {
-    log_debug("tui_init() called");
     get_term_size();
-    log_infof("TUI initialized with terminal size: %dx%d", term_cols, term_rows);
+}
+
+void tui_update_size(void) {
+    get_term_size();
 }
 
 void tui_show_message(const char *message, const char *color) {
