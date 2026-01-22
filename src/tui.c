@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <termios.h>
 #include <sys/ioctl.h>
+#include <signal.h>
 #include "types.h"
 #include "tui.h"
 #include "figlet.h"
@@ -28,9 +29,13 @@
 #define INPUT_OFFSET 10
 #define SESSION_OFFSET 4
 
+/* Internal return codes */
+#define RETURN_RESIZE -3  // Terminal was resized, trigger redraw
+
 /* Terminal dimensions - managed by TUI module */
 static int term_rows = 24;
 static int term_cols = 80;
+static volatile sig_atomic_t term_resized = 0;
 
 static void get_term_size(void) {
     struct winsize ws;
@@ -325,6 +330,13 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
     snprintf(original_username, MAX_NAME, "%s", username);
 
     while (1) {
+        // Check if terminal was resized
+        if (term_resized) {
+            term_resized = 0;
+            tcsetattr(STDIN_FILENO, TCSANOW, &old);
+            return RETURN_RESIZE;
+        }
+
         if (*active_field == 0 && *user_edit_mode) {
             int edit_col = center_col - (int)(strlen(username) / 2) + *user_pos;
             printf("\033[?25h\033[%d;%dH", user_row, edit_col);
@@ -497,6 +509,7 @@ void tui_init(void) {
 
 void tui_update_size(void) {
     get_term_size();
+    term_resized = 1;
 }
 
 void tui_show_message(const char *message, const char *color) {
@@ -569,6 +582,11 @@ int tui_display_login(
     int result = handle_input(username, password, MAX_PASSWORD, &pass_pos, &user_pos, &active_field,
                     &user_edit_mode, user_row, field_row, field_col, session_row, center_col,
                     start_row, start_col, input_col, input_width, sessions, session_count, current_session, colors);
+
+    if (result == RETURN_RESIZE) {
+        // Terminal was resized, restart with new dimensions
+        return 0;
+    }
 
     if (result < 0)
         return result;

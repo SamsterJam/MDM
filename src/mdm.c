@@ -575,9 +575,6 @@ int main(void) {
 
     tui_init();
 
-    // Brief pause to allow SIGWINCH to fire if TTY is still initializing
-    usleep(50000);  // 50ms
-
     // Redirect stderr to /dev/null to prevent journal fallback from cluttering the TUI
     // Journal logging still works via sd_journal_send(), but stderr output is suppressed
     int devnull = open("/dev/null", O_WRONLY);
