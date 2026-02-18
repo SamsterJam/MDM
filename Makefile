@@ -34,6 +34,7 @@ install: $(TARGET)
 	@echo "Creating directories..."
 	mkdir -p $(DESTDIR)$(BINDIR)
 	mkdir -p $(DESTDIR)/usr/lib/systemd/system
+	mkdir -p $(DESTDIR)/usr/lib/systemd/system/getty@tty1.service.d
 	mkdir -p $(DESTDIR)$(PAMDIR)
 	mkdir -p $(DESTDIR)$(SHAREDIR)
 	mkdir -p $(DESTDIR)$(CONFDIR)
@@ -41,6 +42,7 @@ install: $(TARGET)
 	@echo "Installing files..."
 	install -m755 $(TARGET) $(DESTDIR)$(BINDIR)/$(TARGET)
 	install -m644 mdm.service $(DESTDIR)/usr/lib/systemd/system/mdm.service
+	install -m644 getty@tty1.service.d/noclear.conf $(DESTDIR)/usr/lib/systemd/system/getty@tty1.service.d/noclear.conf
 	install -m644 pam.d/mdm $(DESTDIR)$(PAMDIR)/mdm
 	install -m644 assets/standard.flf $(DESTDIR)$(SHAREDIR)/standard.flf
 	install -m644 assets/small.flf $(DESTDIR)$(SHAREDIR)/small.flf
@@ -56,6 +58,8 @@ install: $(TARGET)
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/$(TARGET)
 	rm -f $(DESTDIR)/usr/lib/systemd/system/mdm.service
+	rm -f $(DESTDIR)/usr/lib/systemd/system/getty@tty1.service.d/noclear.conf
+	rmdir --ignore-fail-on-non-empty $(DESTDIR)/usr/lib/systemd/system/getty@tty1.service.d
 	rm -f $(DESTDIR)$(PAMDIR)/mdm
 	rm -f $(DESTDIR)$(SHAREDIR)/standard.flf
 	rm -f $(DESTDIR)$(SHAREDIR)/small.flf

@@ -3,7 +3,9 @@ Description=MDM - Minimal Display Manager
 After=systemd-user-sessions.service
 After=plymouth-quit-wait.service
 Conflicts=getty@tty1.service
+Conflicts=getty@tty2.service
 After=getty@tty1.service
+After=getty@tty2.service
 
 [Service]
 Type=idle
@@ -11,10 +13,11 @@ ExecStart=/usr/bin/mdm
 Restart=always
 StandardInput=tty
 StandardOutput=tty
-TTYPath=/dev/tty1
+TTYPath=/dev/tty2
 TTYReset=yes
 TTYVHangup=yes
 TTYVTDisallocate=yes
+ExecStartPre=/usr/bin/chvt 2
 
 [Install]
 WantedBy=graphical.target

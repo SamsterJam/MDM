@@ -93,7 +93,7 @@ MDM includes a lightweight FIGlet font parser that reads the standard font file 
 - Check session command exists: `which startx` / `which sway` / etc.
 
 **Can't see UI:**
-- Switch to TTY1: `Ctrl+Alt+F1`
+- Switch to TTY1: `Ctrl+Alt+F2`
 - Check status: `systemctl status mdm`
 
 **Disable other display managers:**
