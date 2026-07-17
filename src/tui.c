@@ -35,7 +35,6 @@
 /* Internal return codes */
 #define RETURN_RESIZE -3  // Terminal was resized, trigger redraw
 
-/* Terminal dimensions - managed by TUI module */
 static int term_rows = 24;
 static int term_cols = 80;
 static volatile sig_atomic_t term_resized = 0;
@@ -48,7 +47,6 @@ static void get_term_size(void) {
         term_cols = ws.ws_col;
         log_debugf("Terminal size: %dx%d", term_rows, term_cols);
     } else {
-        // Fallback to defaults
         term_rows = 24;
         term_cols = 80;
         log_warnf("Using default terminal size: %dx%d", term_rows, term_cols);
@@ -81,6 +79,7 @@ static const char *loaded_font = NULL;
 static int ensure_font(const char *font_path) {
     if (loaded_font && strcmp(loaded_font, font_path) == 0)
         return 0;
+    loaded_font = NULL;  // figlet_init unloads the current font even on failure
     if (figlet_init(font_path) != 0)
         return -1;
     loaded_font = font_path;
@@ -110,31 +109,27 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
     static const char *cached_font = NULL;
     int username_len = strlen(username);
 
-    // Initialize line pointers
     for (int i = 0; i < 32; i++) {
         lines[i] = line_buffers[i];
         line_buffers[i][0] = '\0';
     }
 
-    // Only use cached font if username is same length or longer
-    // (if shorter, we should try bigger fonts first)
+    // A shorter username may fit a bigger font, so only trust the cache
+    // when the username is the same length or longer
     if (cached_font != NULL && username_len >= cached_len) {
         ensure_font(cached_font);
         line_count = figlet_render(username, lines, 32);
         if (line_count > 0) {
             max_width = get_max_line_width(lines, line_count);
             if (max_width < box_width) {
-                goto render_success;  // Cache hit, use this font
+                goto render_success;
             }
         }
-        // Cache miss, fall through to try all fonts
-        ensure_font(FONT_FILE);  // Reset to standard
+        ensure_font(FONT_FILE);
     } else {
-        // No cache or username got shorter, reset to standard font
         ensure_font(FONT_FILE);
     }
 
-    // Try rendering with standard font
     line_count = figlet_render(username, lines, 32);
 
     if (line_count > 0) {
@@ -146,7 +141,7 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
             goto render_success;
         }
 
-        // If too wide, try small font
+        // Too wide: try progressively smaller fonts
         if (ensure_font(FONT_FILE_SMALL) == 0) {
             for (int i = 0; i < 32; i++) {
                 line_buffers[i][0] = '\0';
@@ -162,7 +157,6 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
             }
         }
 
-        // If still too wide, try mini font
         if (ensure_font(FONT_FILE_MINI) == 0) {
             for (int i = 0; i < 32; i++) {
                 line_buffers[i][0] = '\0';
@@ -178,9 +172,8 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
             }
         }
 
-        // If still too wide, fall back to plain text
         use_plain_text = 1;
-        cached_font = NULL;  // Clear cache for plain text
+        cached_font = NULL;
     } else {
         use_plain_text = 1;
         cached_font = NULL;
@@ -193,13 +186,11 @@ render_success:;
         config_get_ansi_color("ascii_art");
 
     if (use_plain_text) {
-        // Render as plain text centered in the box
         int len = strlen(username);
         int col = start_col + (box_width - len) / 2 + 1;
         if (col < start_col + 1) col = start_col + 1;
         printf("\033[%d;%dH%s%s\033[0m", start_row + 5, col, color_start, username);
     } else {
-        // Render the ASCII art
         for (int i = 0; i < line_count; i++) {
             int len = strlen(lines[i]);
             int col = start_col + (box_width - len) / 2 + 1;
@@ -256,15 +247,12 @@ static void draw_power_hotkeys(ColorConfig *colors) {
 
     int bottom_row = term_rows - 1;
 
-    // Left: Suspend
     printf("\033[%d;2H%s%s\033[0m", bottom_row, color, suspend_hint);
 
-    // Center: Shutdown
     int shutdown_len = strlen(shutdown_hint);
     int center_col = (term_cols - shutdown_len) / 2;
     printf("\033[%d;%dH%s%s\033[0m", bottom_row, center_col, color, shutdown_hint);
 
-    // Right: Reboot
     int reboot_len = strlen(reboot_hint);
     int right_col = term_cols - reboot_len - 1;
     printf("\033[%d;%dH%s%s\033[0m", bottom_row, right_col, color, reboot_hint);
@@ -294,9 +282,8 @@ static int get_function_key_num(const char *hotkey) {
 }
 
 /*
- * Read one byte from stdin with a timeout (for escape sequence parsing).
- * Returns the byte, or -1 on timeout/interrupt - so a bare ESC press
- * doesn't block and swallow the user's next keystroke.
+ * Read one byte with a timeout, or -1 - so a bare ESC press doesn't
+ * block mid-sequence and swallow the next keystroke.
  */
 static int read_byte_timeout(int timeout_ms) {
     fd_set fds;
@@ -337,7 +324,7 @@ static int handle_power_action(struct termios *old, const char *action, const ch
            config_get_ansi_color("info"), action);
     fflush(stdout);
 
-    // Run systemctl directly (no shell) with a fixed path - this runs as root
+    // Runs as root: fixed path, no shell
     pid_t pid = fork();
     if (pid == 0) {
         execl("/usr/bin/systemctl", "systemctl", verb, (char *)NULL);
@@ -363,8 +350,7 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
 
     tcgetattr(STDIN_FILENO, &old);
     new = old;
-    // Disable ISIG so Ctrl+C/Ctrl+Z arrive as bytes instead of killing or
-    // suspending the login screen; disable IXON so Ctrl+S can't freeze it
+    // No ISIG/IXON: Ctrl+C/Z/S must not kill, suspend, or freeze the DM
     new.c_lflag &= ~(ECHO | ICANON | ISIG);
     new.c_iflag &= ~IXON;
     tcsetattr(STDIN_FILENO, TCSANOW, &new);
@@ -372,10 +358,9 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
     snprintf(original_username, MAX_NAME, "%s", username);
 
     while (1) {
-        // Check if terminal was resized
         if (term_resized) {
             term_resized = 0;
-            get_term_size();  // Re-read here, not in the signal handler
+            get_term_size();  // Not done in the signal handler; ioctl+log here
             tcsetattr(STDIN_FILENO, TCSANOW, &old);
             return RETURN_RESIZE;
         }
@@ -392,10 +377,10 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
 
         int c = getchar();
 
-        // Handle interrupted getchar() (SIGWINCH during input)
+        // SIGWINCH interrupts getchar(); loop back to the resize check
         if (c == EOF && errno == EINTR) {
             clearerr(stdin);
-            continue;  // Loop will check term_resized flag
+            continue;
         }
 
         if (c == 3) {
@@ -441,9 +426,8 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                 if (code >= 'A' && code <= 'E')
                     fkey = code - 'A' + 1;
             } else {
-                // Generic CSI sequence: numeric parameters, then a final byte.
-                // Consuming the whole sequence keeps stray bytes (e.g. the '~'
-                // from Delete/PgUp) from leaking into the password field.
+                // Generic CSI: consume the whole sequence so stray bytes
+                // (e.g. the '~' from Delete/PgUp) can't leak into the password
                 int num = 0, have_num = 0;
                 while (b >= '0' && b <= '9') {
                     num = num * 10 + (b - '0');
@@ -456,7 +440,6 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                 if (b == '~' && have_num) {
                     fkey = fkey_from_tilde_num(num);
                 } else if (*active_field == 2 && (b == 'D' || b == 'C')) {
-                    // Arrow keys for session selection
                     *current_session = (b == 'D') ?
                         (*current_session + session_count - 1) % session_count :
                         (*current_session + 1) % session_count;
@@ -558,8 +541,7 @@ void tui_init(void) {
 }
 
 void tui_notify_resize(void) {
-    // Called from the SIGWINCH handler - must stay async-signal-safe,
-    // so only set the flag; the input loop re-reads the size
+    // Runs in signal context: must stay async-signal-safe
     term_resized = 1;
 }
 
@@ -635,8 +617,7 @@ int tui_display_login(
                     start_row, start_col, input_col, input_width, sessions, session_count, current_session, colors);
 
     if (result == RETURN_RESIZE) {
-        // Terminal was resized, restart with new dimensions
-        return 0;
+        return 0;  // Caller redraws with the new dimensions
     }
 
     if (result < 0)

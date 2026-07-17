@@ -17,8 +17,7 @@
 void tui_init(void);
 
 /*
- * Flag that the terminal was resized (called by the SIGWINCH handler).
- * Async-signal-safe: only sets a flag; the input loop re-reads the size.
+ * Flag a terminal resize (async-signal-safe, called from the SIGWINCH handler)
  */
 void tui_notify_resize(void);
 
