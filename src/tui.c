@@ -375,13 +375,18 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
         }
         fflush(stdout);
 
-        int c = getchar();
-
-        // SIGWINCH interrupts getchar(); loop back to the resize check
-        if (c == EOF && errno == EINTR) {
-            clearerr(stdin);
-            continue;
+        // Raw read(), never stdio: getchar() would buffer whole escape
+        // sequences in userspace where read_byte_timeout's select() can't see them
+        unsigned char ch;
+        ssize_t n = read(STDIN_FILENO, &ch, 1);
+        if (n != 1) {
+            if (n < 0 && errno == EINTR)
+                continue;  // SIGWINCH; loop back to the resize check
+            tcsetattr(STDIN_FILENO, TCSANOW, &old);
+            printf("\033[?25l");
+            return -1;  // TTY hung up
         }
+        int c = ch;
 
         if (c == 3) {
             tcsetattr(STDIN_FILENO, TCSANOW, &old);
