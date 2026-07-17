@@ -4,6 +4,9 @@ After=systemd-user-sessions.service
 After=plymouth-quit-wait.service
 Conflicts=getty@tty1.service
 After=getty@tty1.service
+# Never rate-limit restarts: a crash-looping DM must not leave the
+# machine with no login screen (same as getty@.service)
+StartLimitIntervalSec=0
 
 [Service]
 Type=idle

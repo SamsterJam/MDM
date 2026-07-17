@@ -17,9 +17,10 @@
 void tui_init(void);
 
 /*
- * Update terminal size (called by SIGWINCH handler)
+ * Flag that the terminal was resized (called by the SIGWINCH handler).
+ * Async-signal-safe: only sets a flag; the input loop re-reads the size.
  */
-void tui_update_size(void);
+void tui_notify_resize(void);
 
 /*
  * Display the login screen and handle user input

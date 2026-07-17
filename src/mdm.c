@@ -17,7 +17,6 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <security/pam_appl.h>
-#include <security/pam_misc.h>
 #include <termios.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -139,8 +138,16 @@ static void parse_desktop_file(const char *filepath, const char *type) {
     char line[512];
     char name[MAX_NAME] = {0};
     char exec[256] = {0};
+    int in_entry = 1;
 
     while (fgets(line, sizeof(line), f)) {
+        // Only read keys from the [Desktop Entry] section, not [Desktop Action ...]
+        if (line[0] == '[') {
+            in_entry = (strncmp(line, "[Desktop Entry]", 15) == 0);
+            continue;
+        }
+        if (!in_entry) continue;
+
         if (strncmp(line, "Name=", 5) == 0) {
             snprintf(name, MAX_NAME, "%.127s", line + 5);
             char *nl = strchr(name, '\n');
@@ -172,7 +179,8 @@ static void detect_sessions(void) {
 
         struct dirent *entry;
         while ((entry = readdir(dir)) != NULL) {
-            if (strstr(entry->d_name, ".desktop")) {
+            size_t name_len = strlen(entry->d_name);
+            if (name_len > 8 && strcmp(entry->d_name + name_len - 8, ".desktop") == 0) {
                 if (strstr(entry->d_name, "uwsm")) {
                     continue;
                 }
@@ -241,8 +249,14 @@ static void load_state(char *display_name) {
 static void save_state(const char *display_name) {
     mkdir("/var/cache/mdm", 0700);
 
-    FILE *f = fopen(STATE_FILE, "w");
-    if (!f) return;
+    int fd = open(STATE_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return;
+
+    FILE *f = fdopen(fd, "w");
+    if (!f) {
+        close(fd);
+        return;
+    }
 
     if (current_user >= 0 && current_user < user_count)
         fprintf(f, "last_user=%s\n", users[current_user].username);
@@ -324,8 +338,8 @@ static void setup_user_environment(struct passwd *pw, const char *session_type, 
     setenv("XDG_CURRENT_DESKTOP", sessions[current_session].name, 1);
     setenv("DESKTOP_SESSION", sessions[current_session].name, 1);
 
-    if (chdir(pw->pw_dir) != 0) {
-        chdir("/");
+    if (chdir(pw->pw_dir) != 0 && chdir("/") != 0) {
+        log_warnf("Could not chdir to %s or /: %s", pw->pw_dir, strerror(errno));
     }
 }
 
@@ -346,6 +360,56 @@ static int init_groups(struct passwd *pw) {
     }
 
     return 0;
+}
+
+/* Write a .Xauthority field: 2-byte big-endian length followed by data */
+static void write_auth_field(FILE *f, const void *data, unsigned short len) {
+    fputc(len >> 8, f);
+    fputc(len & 0xff, f);
+    fwrite(data, 1, len, f);
+}
+
+/*
+ * Write a fresh MIT-MAGIC-COOKIE-1 to the user's .Xauthority (like startx does)
+ * so the X server only accepts clients that can read the cookie. Without this,
+ * any local user could connect to the display and sniff input.
+ * Must be called after privileges are dropped so the file is owned by the user.
+ */
+static int write_xauth_cookie(const char *xauth_path, int display_num) {
+    unsigned char cookie[16];
+    char hostname[256];
+    char dispnum[16];
+
+    FILE *urandom = fopen("/dev/urandom", "r");
+    if (!urandom) return -1;
+    size_t n = fread(cookie, 1, sizeof(cookie), urandom);
+    fclose(urandom);
+    if (n != sizeof(cookie)) return -1;
+
+    if (gethostname(hostname, sizeof(hostname)) != 0) {
+        snprintf(hostname, sizeof(hostname), "localhost");
+    }
+    hostname[sizeof(hostname) - 1] = '\0';
+    snprintf(dispnum, sizeof(dispnum), "%d", display_num);
+
+    int fd = open(xauth_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return -1;
+    FILE *f = fdopen(fd, "w");
+    if (!f) {
+        close(fd);
+        return -1;
+    }
+
+    /* Entry: family FamilyLocal (256), address (hostname), display number,
+     * auth name, cookie data */
+    fputc(1, f);
+    fputc(0, f);
+    write_auth_field(f, hostname, strlen(hostname));
+    write_auth_field(f, dispnum, strlen(dispnum));
+    write_auth_field(f, "MIT-MAGIC-COOKIE-1", 18);
+    write_auth_field(f, cookie, sizeof(cookie));
+
+    return fclose(f) == 0 ? 0 : -1;
 }
 
 static int start_session(const char *username, pam_handle_t *pamh) {
@@ -426,8 +490,9 @@ static int start_session(const char *username, pam_handle_t *pamh) {
         // Declare these outside the if block to ensure they remain in scope
         char display_arg[16];
         char vt_arg[16];
-        char *shell_cmd = NULL;
-        char *cmd_copy = NULL;
+        char xauth_path[512];
+        char shell_cmd[1024];
+        char cmd_buf[256];
 
         if (strcmp(sessions[current_session].type, "x11") == 0) {
             // Build xinit command with dynamic display and vt
@@ -435,14 +500,20 @@ static int start_session(const char *username, pam_handle_t *pamh) {
             snprintf(display_arg, sizeof(display_arg), ":%d", vt_number - 1);
             snprintf(vt_arg, sizeof(vt_arg), "vt%d", vt_number);
 
+            // Generate an xauth cookie so only this user's clients can connect
+            snprintf(xauth_path, sizeof(xauth_path), "%s/.Xauthority", pw->pw_dir);
+            int have_xauth = (write_xauth_cookie(xauth_path, vt_number - 1) == 0);
+            if (!have_xauth) {
+                log_warnf("Could not write %s; starting X without access control", xauth_path);
+            }
+
             argv[argc++] = "xinit";
             argv[argc++] = "/bin/sh";
             argv[argc++] = "-c";
 
             // Build shell command that sources user's X startup files before launching session
             // This ensures .Xresources is loaded and xinitrc.d scripts run
-            shell_cmd = malloc(1024);
-            snprintf(shell_cmd, 1024,
+            snprintf(shell_cmd, sizeof(shell_cmd),
                 "[ -f /etc/xprofile ] && . /etc/xprofile; "
                 "[ -f ~/.xprofile ] && . ~/.xprofile; "
                 "[ -f ~/.Xresources ] && xrdb -merge ~/.Xresources; "
@@ -453,10 +524,14 @@ static int start_session(const char *username, pam_handle_t *pamh) {
             argv[argc++] = "--";
             argv[argc++] = display_arg;
             argv[argc++] = vt_arg;
+            if (have_xauth) {
+                argv[argc++] = "-auth";
+                argv[argc++] = xauth_path;
+            }
             argv[argc] = NULL;
         } else {
-            cmd_copy = strdup(sessions[current_session].exec);
-            char *token = strtok(cmd_copy, " ");
+            snprintf(cmd_buf, sizeof(cmd_buf), "%s", sessions[current_session].exec);
+            char *token = strtok(cmd_buf, " ");
 
             while (token && argc < 63) {
                 argv[argc++] = token;
@@ -475,20 +550,23 @@ static int start_session(const char *username, pam_handle_t *pamh) {
 
         execvp(argv[0], argv);
 
-        // execvp only returns on failure - cleanup allocated memory
-        if (shell_cmd) free(shell_cmd);
-        if (cmd_copy) free(cmd_copy);
-
         log_criticalf("Failed to execute %s: %s (errno: %d)", argv[0], strerror(errno), errno);
         exit(1);
     }
 
     // Parent process
+    // Retry on EINTR: SIGWINCH is installed without SA_RESTART, so a resize
+    // during the session would otherwise abort the wait with garbage status
     int status;
-    waitpid(pid, &status, 0);
+    pid_t w;
+    do {
+        w = waitpid(pid, &status, 0);
+    } while (w < 0 && errno == EINTR);
 
     // Log session exit status to journal
-    if (WIFEXITED(status)) {
+    if (w < 0) {
+        log_errorf("waitpid failed for session of user %s: %s", username, strerror(errno));
+    } else if (WIFEXITED(status)) {
         log_infof("Session ended for user %s, exit code: %d", username, WEXITSTATUS(status));
     } else if (WIFSIGNALED(status)) {
         log_warnf("Session for user %s killed by signal: %d", username, WTERMSIG(status));
@@ -503,7 +581,7 @@ static int start_session(const char *username, pam_handle_t *pamh) {
     return 0;
 }
 
-static int authenticate(const char *username, const char *password, const char *display_name) {
+static int authenticate(const char *username, char *password, const char *display_name) {
     pam_handle_t *pamh = NULL;
     struct pam_conv conv = {
         pam_conversation,
@@ -516,6 +594,14 @@ static int authenticate(const char *username, const char *password, const char *
     if (retval != PAM_SUCCESS) {
         log_errorf("pam_start failed (error code %d)", retval);
         return -1;
+    }
+
+    // Tell PAM which tty this login is on (pam_securetty, faillock, logind)
+    const char *tty_name = ttyname(STDIN_FILENO);
+    if (tty_name) {
+        if (strncmp(tty_name, "/dev/", 5) == 0)
+            tty_name += 5;
+        pam_set_item(pamh, PAM_TTY, tty_name);
     }
 
     retval = pam_authenticate(pamh, 0);
@@ -532,11 +618,25 @@ static int authenticate(const char *username, const char *password, const char *
         return -1;
     }
 
+    // Establish credentials (kerberos tickets, group membership, etc.)
+    // before opening the session, mirroring what login/other DMs do
+    retval = pam_setcred(pamh, PAM_ESTABLISH_CRED);
+    if (retval != PAM_SUCCESS) {
+        log_errorf("pam_setcred failed for user '%s': %s", username, pam_strerror(pamh, retval));
+        pam_end(pamh, retval);
+        return -1;
+    }
+
     // Save state BEFORE starting the session to ensure it persists even if session crashes
     save_state(display_name);
 
+    // PAM has consumed the password; wipe the plaintext copy so it doesn't
+    // sit in this (long-lived, root) process for the whole session
+    explicit_bzero(password, MAX_PASSWORD);
+
     start_session(username, pamh);
 
+    pam_setcred(pamh, PAM_DELETE_CRED);
     pam_end(pamh, PAM_SUCCESS);
 
     return 0;
@@ -544,7 +644,9 @@ static int authenticate(const char *username, const char *password, const char *
 
 static void handle_sigwinch(int sig) {
     (void)sig;
-    tui_update_size();
+    // Only sets a flag - anything more (ioctl, journal, malloc) is not
+    // async-signal-safe. The TUI re-reads the size when it sees the flag.
+    tui_notify_resize();
 }
 
 int main(void) {
@@ -553,6 +655,7 @@ int main(void) {
     char display_name[MAX_NAME] = {0};
 
     if (getuid() != 0) {
+        fprintf(stderr, "mdm: must be run as root\n");
         log_critical("mdm must be run as root");
         return 1;
     }
@@ -663,16 +766,30 @@ int main(void) {
             exit(result == 0 ? 0 : 1);
         }
 
-        // Parent: wait for auth child to complete
+        // Parent: the child has its own copy of the password, wipe ours now
+        explicit_bzero(password, sizeof(password));
+
+        // Wait for auth child to complete, retrying on EINTR (SIGWINCH is
+        // installed without SA_RESTART and would otherwise abort the wait,
+        // making a mid-session resize redraw the login screen over the session)
         int auth_status;
-        waitpid(auth_pid, &auth_status, 0);
+        pid_t w;
+        do {
+            w = waitpid(auth_pid, &auth_status, 0);
+        } while (w < 0 && errno == EINTR);
+
+        if (w < 0) {
+            log_errorf("waitpid failed for auth child: %s", strerror(errno));
+            tui_show_message("System error!", config_get_ansi_color("error"));
+            sleep(2);
+            continue;
+        }
 
         // Treat as successful logout if:
         // 1. Child exited normally with code 0 (typical X session logout)
         // 2. Child was terminated by signal (typical Wayland session cleanup by systemd-logind)
         if ((WIFEXITED(auth_status) && WEXITSTATUS(auth_status) == 0) || WIFSIGNALED(auth_status)) {
             // Session ended (user logged out) - clean up and return to login
-            memset(password, 0, sizeof(password));
             strncpy(username, display_name, MAX_NAME - 1);
             username[MAX_NAME - 1] = '\0';
 
@@ -680,13 +797,13 @@ int main(void) {
             printf("\033c");  // Full terminal reset (ESC c)
             fflush(stdout);
             usleep(100000);  // 100ms to let terminal settle
+            config_apply_tty_colors(&colors);  // ESC c resets the console palette
             tui_init();
             continue;
         } else {
             // Only show auth failed if child actually exited with error code (not signal)
             tui_show_message("Authentication failed!", config_get_ansi_color("error"));
             sleep(2);
-            memset(password, 0, sizeof(password));
         }
     }
 

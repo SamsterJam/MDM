@@ -9,6 +9,8 @@
 #include <unistd.h>
 #include <termios.h>
 #include <sys/ioctl.h>
+#include <sys/select.h>
+#include <sys/wait.h>
 #include <signal.h>
 #include <errno.h>
 #include "types.h"
@@ -44,7 +46,7 @@ static void get_term_size(void) {
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0 && ws.ws_col > 0) {
         term_rows = ws.ws_row;
         term_cols = ws.ws_col;
-        log_infof("Terminal size: %dx%d", term_rows, term_cols);
+        log_debugf("Terminal size: %dx%d", term_rows, term_cols);
     } else {
         // Fallback to defaults
         term_rows = 24;
@@ -71,6 +73,18 @@ static void draw_box(int row, int col, int width, int height) {
     printf("\033[%d;%dH└", row + height + 1, col);
     draw_repeat("─", width);
     printf("┘");
+}
+
+/* Track the currently-loaded figlet font so redraws don't re-read it from disk */
+static const char *loaded_font = NULL;
+
+static int ensure_font(const char *font_path) {
+    if (loaded_font && strcmp(loaded_font, font_path) == 0)
+        return 0;
+    if (figlet_init(font_path) != 0)
+        return -1;
+    loaded_font = font_path;
+    return 0;
 }
 
 static int get_max_line_width(char **lines, int line_count) {
@@ -105,9 +119,7 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
     // Only use cached font if username is same length or longer
     // (if shorter, we should try bigger fonts first)
     if (cached_font != NULL && username_len >= cached_len) {
-        if (strcmp(cached_font, FONT_FILE) != 0) {
-            figlet_init(cached_font);
-        }
+        ensure_font(cached_font);
         line_count = figlet_render(username, lines, 32);
         if (line_count > 0) {
             max_width = get_max_line_width(lines, line_count);
@@ -116,10 +128,10 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
             }
         }
         // Cache miss, fall through to try all fonts
-        figlet_init(FONT_FILE);  // Reset to standard
+        ensure_font(FONT_FILE);  // Reset to standard
     } else {
         // No cache or username got shorter, reset to standard font
-        figlet_init(FONT_FILE);
+        ensure_font(FONT_FILE);
     }
 
     // Try rendering with standard font
@@ -135,7 +147,7 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
         }
 
         // If too wide, try small font
-        if (figlet_init(FONT_FILE_SMALL) == 0) {
+        if (ensure_font(FONT_FILE_SMALL) == 0) {
             for (int i = 0; i < 32; i++) {
                 line_buffers[i][0] = '\0';
             }
@@ -151,7 +163,7 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
         }
 
         // If still too wide, try mini font
-        if (figlet_init(FONT_FILE_MINI) == 0) {
+        if (ensure_font(FONT_FILE_MINI) == 0) {
             for (int i = 0; i < 32; i++) {
                 line_buffers[i][0] = '\0';
             }
@@ -174,7 +186,7 @@ static void draw_title(int start_row, int start_col, int box_width, const char *
         cached_font = NULL;
     }
 
-render_success:
+render_success:;
 
     const char *color_start = highlighted ?
         config_get_ansi_color("ascii_highlight") :
@@ -196,11 +208,6 @@ render_success:
         }
     }
 
-    // Only reload standard font if we're not using it (for consistency)
-    // The cache will handle font selection on next call
-    if (!use_plain_text && cached_font != NULL && strcmp(cached_font, FONT_FILE) != 0) {
-        figlet_init(cached_font);  // Keep the cached font loaded
-    }
 }
 
 static void draw_session_selector(int row, int col, Session *sessions, int current_session, int is_active) {
@@ -286,31 +293,62 @@ static int get_function_key_num(const char *hotkey) {
     return (key_num >= 1 && key_num <= 12) ? key_num : 0;
 }
 
-static int check_hotkey_match(char bracket_code, char seq_c1, char seq_c2, char tilde, int target_key) {
-    if (!target_key) return 0;
+/*
+ * Read one byte from stdin with a timeout (for escape sequence parsing).
+ * Returns the byte, or -1 on timeout/interrupt - so a bare ESC press
+ * doesn't block and swallow the user's next keystroke.
+ */
+static int read_byte_timeout(int timeout_ms) {
+    fd_set fds;
+    struct timeval tv;
+    unsigned char b;
 
-    // F1-F5: ESC [ [ A-E
-    if (bracket_code && target_key >= 1 && target_key <= 5) {
-        return bracket_code == ('A' + target_key - 1);
-    }
+    FD_ZERO(&fds);
+    FD_SET(STDIN_FILENO, &fds);
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
 
-    // F6-F12: ESC [ XY~
-    if (tilde == '~' && target_key >= 6 && target_key <= 12) {
-        const char *seqs[] = {"", "", "", "", "", "17", "18", "19", "20", "21", "23", "24"};
-        return (seq_c1 == seqs[target_key - 1][0] && seq_c2 == seqs[target_key - 1][1]);
-    }
-
-    return 0;
+    if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) != 1)
+        return -1;
+    if (read(STDIN_FILENO, &b, 1) != 1)
+        return -1;
+    return b;
 }
 
-static int handle_power_action(struct termios *old, const char *action, const char *cmd) {
+/* Map "ESC [ <num> ~" sequences to function key numbers */
+static int fkey_from_tilde_num(int num) {
+    switch (num) {
+        case 17: return 6;
+        case 18: return 7;
+        case 19: return 8;
+        case 20: return 9;
+        case 21: return 10;
+        case 23: return 11;
+        case 24: return 12;
+        default: return 0;
+    }
+}
+
+static int handle_power_action(struct termios *old, const char *action, const char *verb) {
     tcsetattr(STDIN_FILENO, TCSANOW, old);
     printf("\033[2J\033[H");
     int msg_len = strlen(action);
     printf("\033[%d;%dH%s%s\033[0m\n", term_rows / 2, (term_cols - msg_len) / 2,
            config_get_ansi_color("info"), action);
     fflush(stdout);
-    system(cmd);
+
+    // Run systemctl directly (no shell) with a fixed path - this runs as root
+    pid_t pid = fork();
+    if (pid == 0) {
+        execl("/usr/bin/systemctl", "systemctl", verb, (char *)NULL);
+        _exit(127);
+    }
+    if (pid > 0) {
+        int status;
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+            ;
+    }
+
     printf("\033[?25l");
     return -2;
 }
@@ -325,7 +363,10 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
 
     tcgetattr(STDIN_FILENO, &old);
     new = old;
-    new.c_lflag &= ~(ECHO | ICANON);
+    // Disable ISIG so Ctrl+C/Ctrl+Z arrive as bytes instead of killing or
+    // suspending the login screen; disable IXON so Ctrl+S can't freeze it
+    new.c_lflag &= ~(ECHO | ICANON | ISIG);
+    new.c_iflag &= ~IXON;
     tcsetattr(STDIN_FILENO, TCSANOW, &new);
 
     snprintf(original_username, MAX_NAME, "%s", username);
@@ -334,6 +375,7 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
         // Check if terminal was resized
         if (term_resized) {
             term_resized = 0;
+            get_term_size();  // Re-read here, not in the signal handler
             tcsetattr(STDIN_FILENO, TCSANOW, &old);
             return RETURN_RESIZE;
         }
@@ -386,44 +428,36 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
         }
 
         if (c == 27) {
-            c = getchar();
-            if (c == '[') {
-                c = getchar();
+            int b = read_byte_timeout(100);
+            if (b != '[')
+                continue;  // Bare ESC or unrecognized sequence
 
-                int suspend_key = get_function_key_num(colors->suspend_hotkey);
-                int shutdown_key = get_function_key_num(colors->shutdown_hotkey);
-                int reboot_key = get_function_key_num(colors->reboot_hotkey);
+            int fkey = 0;
+            b = read_byte_timeout(100);
 
-                // Handle F1-F5: ESC [ [ X
-                if (c == '[') {
-                    char code = getchar();
-                    if (check_hotkey_match(code, 0, 0, 0, suspend_key))
-                        return handle_power_action(&old, "Suspending...", "systemctl suspend");
-                    if (check_hotkey_match(code, 0, 0, 0, shutdown_key))
-                        return handle_power_action(&old, "Shutting down...", "systemctl poweroff");
-                    if (check_hotkey_match(code, 0, 0, 0, reboot_key))
-                        return handle_power_action(&old, "Rebooting...", "systemctl reboot");
-                    continue;
+            if (b == '[') {
+                // Linux console F1-F5: ESC [ [ A-E
+                int code = read_byte_timeout(100);
+                if (code >= 'A' && code <= 'E')
+                    fkey = code - 'A' + 1;
+            } else {
+                // Generic CSI sequence: numeric parameters, then a final byte.
+                // Consuming the whole sequence keeps stray bytes (e.g. the '~'
+                // from Delete/PgUp) from leaking into the password field.
+                int num = 0, have_num = 0;
+                while (b >= '0' && b <= '9') {
+                    num = num * 10 + (b - '0');
+                    have_num = 1;
+                    b = read_byte_timeout(100);
                 }
+                while (b == ';' || (b >= '0' && b <= '9'))
+                    b = read_byte_timeout(100);  // Drain modifier parameters
 
-                // Handle F6-F12: ESC [ XY~
-                if (c >= '1' && c <= '2') {
-                    char c1 = c, c2 = getchar();
-                    if (c2 >= '0' && c2 <= '9') {
-                        char tilde = getchar();
-                        if (check_hotkey_match(0, c1, c2, tilde, suspend_key))
-                            return handle_power_action(&old, "Suspending...", "systemctl suspend");
-                        if (check_hotkey_match(0, c1, c2, tilde, shutdown_key))
-                            return handle_power_action(&old, "Shutting down...", "systemctl poweroff");
-                        if (check_hotkey_match(0, c1, c2, tilde, reboot_key))
-                            return handle_power_action(&old, "Rebooting...", "systemctl reboot");
-                    }
-                    continue;
-                }
-
-                // Handle arrow keys for session selection
-                if (*active_field == 2 && (c == 'D' || c == 'C')) {
-                    *current_session = (c == 'D') ?
+                if (b == '~' && have_num) {
+                    fkey = fkey_from_tilde_num(num);
+                } else if (*active_field == 2 && (b == 'D' || b == 'C')) {
+                    // Arrow keys for session selection
+                    *current_session = (b == 'D') ?
                         (*current_session + session_count - 1) % session_count :
                         (*current_session + 1) % session_count;
                     int clear_start = center_col - 25;
@@ -432,6 +466,15 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                     draw_session_selector(session_row, center_col, sessions, *current_session, 1);
                     fflush(stdout);
                 }
+            }
+
+            if (fkey) {
+                if (fkey == get_function_key_num(colors->suspend_hotkey))
+                    return handle_power_action(&old, "Suspending...", "suspend");
+                if (fkey == get_function_key_num(colors->shutdown_hotkey))
+                    return handle_power_action(&old, "Shutting down...", "poweroff");
+                if (fkey == get_function_key_num(colors->reboot_hotkey))
+                    return handle_power_action(&old, "Rebooting...", "reboot");
             }
             continue;
         }
@@ -514,8 +557,9 @@ void tui_init(void) {
     get_term_size();
 }
 
-void tui_update_size(void) {
-    get_term_size();
+void tui_notify_resize(void) {
+    // Called from the SIGWINCH handler - must stay async-signal-safe,
+    // so only set the flag; the input loop re-reads the size
     term_resized = 1;
 }
 

@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -O2
-LDFLAGS = -lpam -lsystemd
+CFLAGS = -Wall -Wextra -O2 -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Wformat -Wformat-security -fPIE
+LDFLAGS = -pie -Wl,-z,relro,-z,now -lpam -lsystemd
 
 PREFIX = /usr
 BINDIR = $(PREFIX)/bin
@@ -37,7 +37,7 @@ install: $(TARGET)
 	mkdir -p $(DESTDIR)$(PAMDIR)
 	mkdir -p $(DESTDIR)$(SHAREDIR)
 	mkdir -p $(DESTDIR)$(CONFDIR)
-	mkdir -p $(DESTDIR)/var/cache/mdm
+	install -d -m700 $(DESTDIR)/var/cache/mdm
 	@echo "Installing files..."
 	install -m755 $(TARGET) $(DESTDIR)$(BINDIR)/$(TARGET)
 	install -m644 mdm.service $(DESTDIR)/usr/lib/systemd/system/mdm.service

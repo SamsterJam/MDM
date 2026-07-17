@@ -141,6 +141,13 @@ static int readfont(const char *font_path) {
         return -1;
     }
 
+    /* Sanity-check header values before using them for allocation sizes
+     * (32 matches the line buffers callers pass to figlet_render) */
+    if (charheight < 1 || charheight > 32 || cmtlines < 0) {
+        fclose(fontfile);
+        return -1;
+    }
+
     /* Skip comment lines */
     for (i = 1; i <= cmtlines; i++) {
         if (fgets(fileline, MAXLEN, fontfile) == NULL) {
