@@ -34,10 +34,24 @@
 
 /* Internal return codes */
 #define RETURN_RESIZE -3  // Terminal was resized, trigger redraw
+#define RETURN_POWER  -2  // Power action ran, redraw the login screen
 
 static int term_rows = 24;
 static int term_cols = 80;
 static volatile sig_atomic_t term_resized = 0;
+
+/*
+ * Terminal mode ownership.
+ *
+ * MDM holds the login TTY in raw mode for as long as it owns the screen, not
+ * just while a read() is outstanding. Dropping back to cooked mode while the
+ * login box is still displayed lets the kernel echo whatever the user types
+ * straight onto the screen in plaintext, and leaves those keystrokes queued
+ * where the next password read will silently swallow them.
+ */
+static struct termios saved_termios;
+static int have_saved_termios = 0;
+static int raw_mode_active = 0;
 
 static void get_term_size(void) {
     struct winsize ws;
@@ -51,6 +65,54 @@ static void get_term_size(void) {
         term_cols = 80;
         log_warnf("Using default terminal size: %dx%d", term_rows, term_cols);
     }
+}
+
+int tui_enter_raw(void) {
+    struct termios raw, check;
+
+    if (!have_saved_termios) {
+        if (tcgetattr(STDIN_FILENO, &saved_termios) != 0) {
+            log_errorf("tcgetattr failed on login TTY: %s", strerror(errno));
+            raw_mode_active = 0;
+            return -1;
+        }
+        have_saved_termios = 1;
+    }
+
+    raw = saved_termios;
+    // No ISIG/IXON: Ctrl+C/Z/S must not kill, suspend, or freeze the DM.
+    // Every ECHO* bit goes too, so nothing can render a keystroke for us.
+    raw.c_lflag &= ~(ECHO | ECHOE | ECHOK | ECHONL | ECHOCTL | ECHOPRT | ECHOKE |
+                     ICANON | ISIG);
+    raw.c_iflag &= ~IXON;
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+
+    // TCSAFLUSH, not TCSANOW: discard anything typed while the terminal was
+    // still echoing so it cannot be consumed as password input afterwards
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != 0) {
+        log_errorf("tcsetattr failed to put login TTY in raw mode: %s", strerror(errno));
+        raw_mode_active = 0;
+        return -1;
+    }
+
+    // tcsetattr succeeds if *any* of the requested changes took, so confirm
+    // the two bits that actually matter really are off before trusting it
+    if (tcgetattr(STDIN_FILENO, &check) != 0 || (check.c_lflag & (ECHO | ICANON))) {
+        log_error("Login TTY still echoes input after switching to raw mode");
+        raw_mode_active = 0;
+        return -1;
+    }
+
+    raw_mode_active = 1;
+    return 0;
+}
+
+void tui_leave_raw(void) {
+    if (!have_saved_termios)
+        return;
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_termios);
+    raw_mode_active = 0;
 }
 
 static void draw_repeat(const char *str, int count) {
@@ -316,8 +378,12 @@ static int fkey_from_tilde_num(int num) {
     }
 }
 
-static int handle_power_action(struct termios *old, const char *action, const char *verb) {
-    tcsetattr(STDIN_FILENO, TCSANOW, old);
+/*
+ * Runs a systemctl power verb. The TTY deliberately stays in raw mode: the
+ * machine may come back from suspend with the login screen still up, and a
+ * cooked terminal there would echo the user's password.
+ */
+static int handle_power_action(const char *action, const char *verb) {
     printf("\033[2J\033[H");
     int msg_len = strlen(action);
     printf("\033[%d;%dH%s%s\033[0m\n", term_rows / 2, (term_cols - msg_len) / 2,
@@ -337,7 +403,8 @@ static int handle_power_action(struct termios *old, const char *action, const ch
     }
 
     printf("\033[?25l");
-    return -2;
+    fflush(stdout);
+    return RETURN_POWER;
 }
 
 static int handle_input(char *username, char *password, int max_len, int *pass_pos, int *user_pos,
@@ -345,15 +412,13 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
                        int pass_col, int session_row, int center_col,
                        int start_row, int start_col, int input_col, int input_width,
                        Session *sessions, int session_count, int *current_session, ColorConfig *colors) {
-    struct termios old, new;
     char original_username[MAX_NAME];
 
-    tcgetattr(STDIN_FILENO, &old);
-    new = old;
-    // No ISIG/IXON: Ctrl+C/Z/S must not kill, suspend, or freeze the DM
-    new.c_lflag &= ~(ECHO | ICANON | ISIG);
-    new.c_iflag &= ~IXON;
-    tcsetattr(STDIN_FILENO, TCSANOW, &new);
+    // The TTY is put in raw mode once at startup and re-armed after a session
+    // ends. Re-assert it here so a failure surfaces before we accept a
+    // password rather than after the kernel has echoed it onto the screen.
+    if (!raw_mode_active && tui_enter_raw() != 0)
+        return -1;
 
     snprintf(original_username, MAX_NAME, "%s", username);
 
@@ -361,7 +426,6 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
         if (term_resized) {
             term_resized = 0;
             get_term_size();  // Not done in the signal handler; ioctl+log here
-            tcsetattr(STDIN_FILENO, TCSANOW, &old);
             return RETURN_RESIZE;
         }
 
@@ -382,14 +446,12 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
         if (n != 1) {
             if (n < 0 && errno == EINTR)
                 continue;  // SIGWINCH; loop back to the resize check
-            tcsetattr(STDIN_FILENO, TCSANOW, &old);
             printf("\033[?25l");
             return -1;  // TTY hung up
         }
         int c = ch;
 
         if (c == 3) {
-            tcsetattr(STDIN_FILENO, TCSANOW, &old);
             printf("\033[?25l");
             return -1;
         }
@@ -458,11 +520,11 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
 
             if (fkey) {
                 if (fkey == get_function_key_num(colors->suspend_hotkey))
-                    return handle_power_action(&old, "Suspending...", "suspend");
+                    return handle_power_action("Suspending...", "suspend");
                 if (fkey == get_function_key_num(colors->shutdown_hotkey))
-                    return handle_power_action(&old, "Shutting down...", "poweroff");
+                    return handle_power_action("Shutting down...", "poweroff");
                 if (fkey == get_function_key_num(colors->reboot_hotkey))
-                    return handle_power_action(&old, "Rebooting...", "reboot");
+                    return handle_power_action("Rebooting...", "reboot");
             }
             continue;
         }
@@ -535,7 +597,6 @@ static int handle_input(char *username, char *password, int max_len, int *pass_p
     }
 
     printf("\033[?25l");
-    tcsetattr(STDIN_FILENO, TCSANOW, &old);
     return 0;
 }
 
@@ -623,6 +684,12 @@ int tui_display_login(
 
     if (result == RETURN_RESIZE) {
         return 0;  // Caller redraws with the new dimensions
+    }
+
+    if (result == RETURN_POWER) {
+        // Shutdown/reboot are on their way down anyway; after a suspend we
+        // come back here and must show a login screen, not exit MDM
+        return 0;
     }
 
     if (result < 0)

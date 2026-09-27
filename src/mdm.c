@@ -534,6 +534,9 @@ static int start_session(const char *username, pam_handle_t *pamh) {
         log_debugf("PATH: %s", getenv("PATH"));
         log_debugf("DISPLAY: %s, XDG_RUNTIME_DIR: %s", getenv("DISPLAY"), getenv("XDG_RUNTIME_DIR"));
 
+        // Hand the session a normal TTY; MDM re-arms raw mode once it ends
+        tui_leave_raw();
+
         execvp(argv[0], argv);
 
         log_criticalf("Failed to execute %s: %s (errno: %d)", argv[0], strerror(errno), errno);
@@ -656,6 +659,16 @@ int main(void) {
 
     tui_init();
 
+    // Take the TTY out of echo/canonical mode before anything can be typed, and
+    // hold it that way for MDM's whole lifetime. If this fails we cannot stop
+    // the kernel printing the user's password on screen, so don't prompt at all.
+    if (tui_enter_raw() != 0) {
+        log_critical("Could not disable terminal echo; refusing to prompt for a password");
+        fprintf(stderr, "mdm: cannot secure the terminal, refusing to start\n");
+        sleep(5);  // Don't hot-loop under Restart=always
+        return 1;
+    }
+
     // Silence stderr so stray library output can't clutter the TUI (journal still works)
     int devnull = open("/dev/null", O_WRONLY);
     if (devnull >= 0) {
@@ -746,6 +759,14 @@ int main(void) {
             w = waitpid(auth_pid, &auth_status, 0);
         } while (w < 0 && errno == EINTR);
 
+        // Re-arm raw mode before anything else is drawn. The session may have
+        // handed the TTY back in cooked mode, and this also flushes keystrokes
+        // typed while PAM was busy so they can't become the next password.
+        if (tui_enter_raw() != 0) {
+            log_critical("Could not disable terminal echo after session; refusing to prompt");
+            break;
+        }
+
         if (w < 0) {
             log_errorf("waitpid failed for auth child: %s", strerror(errno));
             tui_show_message("System error!", config_get_ansi_color("error"));
@@ -764,6 +785,10 @@ int main(void) {
             usleep(100000);  // Let the terminal settle
             config_apply_tty_colors(&colors);  // ESC c resets the console palette
             tui_init();
+            if (tui_enter_raw() != 0) {  // Re-assert after the reset
+                log_critical("Could not disable terminal echo after reset; refusing to prompt");
+                break;
+            }
             continue;
         } else {
             tui_show_message("Authentication failed!", config_get_ansi_color("error"));
@@ -772,6 +797,8 @@ int main(void) {
     }
 
     printf("\033[?25h\033[2J\033[H");
+    fflush(stdout);
+    tui_leave_raw();  // Give the console back in a usable state
 
     figlet_cleanup();
     return 0;

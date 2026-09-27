@@ -22,6 +22,27 @@ void tui_init(void);
 void tui_notify_resize(void);
 
 /*
+ * Put the login TTY in raw mode (no echo, no canonical line editing) and keep
+ * it there. Must be held for as long as MDM owns the screen - in cooked mode
+ * the kernel echoes keystrokes onto the login box in plaintext and queues them
+ * for the next password read.
+ *
+ * Safe to call repeatedly; each call also flushes pending input, so anything
+ * typed while the terminal was echoing is discarded rather than reused.
+ *
+ * Returns 0 if echo is confirmed off, -1 otherwise. A -1 must be treated as
+ * "do not prompt for a password".
+ */
+int tui_enter_raw(void);
+
+/*
+ * Restore the terminal mode saved by the first tui_enter_raw(). Call only when
+ * MDM is handing the TTY to a session or exiting - never while the login
+ * screen is still displayed.
+ */
+void tui_leave_raw(void);
+
+/*
  * Display the login screen and handle user input
  *
  * Parameters:
@@ -37,9 +58,11 @@ void tui_notify_resize(void);
  *
  * Returns:
  *    1: Success, user entered password (proceed with authentication)
- *    0: Retry (empty password entered)
+ *    0: Redraw and call again (empty password, resize, or power action)
  *   -1: Exit/Ctrl-C pressed
- *   -2: Power action executed (suspend/shutdown/reboot)
+ *
+ * The TTY is left in raw mode on every path; the caller keeps it that way
+ * until it hands the terminal to a session or exits.
  */
 int tui_display_login(
     char *username,
